@@ -80,9 +80,15 @@ export class WipegramApp {
   #previewLoading = false
   #previewToken = 0
   #countAbort: AbortController | null = null
+  #authAbort: AbortController | null = null
   #deleteAbort: AbortController | null = null
   #deleteProgress: DeleteProgress | null = null
   #closing = false
+  #refreshGeneration = 0
+  readonly #signals: NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT"]
+  readonly #signalHandler = (): void => {
+    void this.close()
+  }
 
   constructor(private readonly renderer: CliRenderer) {}
 
@@ -91,6 +97,7 @@ export class WipegramApp {
     this.renderer.keyInput.on("keypress", (key: KeyEvent) => void this.onKey(key))
     this.renderer.keyInput.on("paste", (event: PasteEvent) => this.onPaste(event))
     this.renderer.on("resize", () => this.render())
+    for (const signal of this.#signals) process.once(signal, this.#signalHandler)
     this.render()
   }
 
@@ -275,6 +282,7 @@ export class WipegramApp {
     }
 
     this.#error = ""
+    this.#authAbort = new AbortController()
     this.#screen = { kind: "authenticating", message: "Connecting securely to Telegram..." }
     for (const field of this.#fields) field.value = ""
     this.render()
@@ -292,14 +300,18 @@ export class WipegramApp {
           },
         },
         this.#diagnostics,
+        this.#authAbort.signal,
       )
       this.#service = authenticated.service
       this.#status = `Signed in as ${authenticated.user.displayName}`
       this.#screen = { kind: "chats" }
       await this.refresh()
     } catch (error) {
+      if (this.#closing) return
       this.#error = error instanceof Error ? error.message : "Authentication failed"
       this.#screen = { kind: "credentials" }
+    } finally {
+      this.#authAbort = null
     }
     this.render()
   }
@@ -319,6 +331,7 @@ export class WipegramApp {
 
   private async refresh(): Promise<void> {
     if (!this.#service) return
+    const generation = ++this.#refreshGeneration
     this.#countAbort?.abort()
     this.#countAbort = new AbortController()
     this.#previewCache.clear()
@@ -328,7 +341,9 @@ export class WipegramApp {
     this.render()
     try {
       const selectedBefore = new Set(this.#selected)
-      this.#chats = (await this.#service.getDialogs()).map((chat) => ({ ...chat }))
+      const dialogs = await this.#service.getDialogs()
+      if (generation !== this.#refreshGeneration) return
+      this.#chats = dialogs.map((chat) => ({ ...chat }))
       this.#selected.clear()
       for (const chat of this.#chats) if (selectedBefore.has(chat.id)) this.#selected.add(chat.id)
       this.#cursor = Math.min(this.#cursor, Math.max(this.#chats.length - 1, 0))
@@ -338,6 +353,7 @@ export class WipegramApp {
       await this.#service.countOwnMessages(
         this.#chats,
         (progress) => {
+          if (generation !== this.#refreshGeneration) return
           const chat = this.#chats.find((item) => item.id === progress.chatId)
           if (chat) {
             chat.count = progress.count
@@ -352,8 +368,10 @@ export class WipegramApp {
         this.#countAbort.signal,
       )
     } catch (error) {
+      if (generation !== this.#refreshGeneration) return
       this.#error = error instanceof Error ? error.message : "Unable to load chats"
     }
+    if (generation !== this.#refreshGeneration) return
     this.render()
   }
 
@@ -771,17 +789,21 @@ export class WipegramApp {
   private async close(): Promise<void> {
     if (this.#closing) return
     this.#closing = true
+    this.#refreshGeneration += 1
+    this.#pendingPrompt?.resolve("")
+    this.#pendingPrompt = null
+    this.#authAbort?.abort()
     this.#countAbort?.abort()
     this.#deleteAbort?.abort()
     try {
       await this.#service?.disconnect()
     } finally {
       this.#service = null
-      this.#pendingPrompt = null
       this.#promptValue = ""
       for (const field of this.#fields) field.value = ""
       this.#previewCache.clear()
       this.#chats = []
+      for (const signal of this.#signals) process.removeListener(signal, this.#signalHandler)
       this.renderer.destroy()
     }
   }

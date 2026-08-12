@@ -101,6 +101,7 @@ export class TelegramService {
     credentials: TelegramCredentials,
     prompts: AuthenticationPrompts,
     diagnostics: Diagnostics,
+    abortSignal?: AbortSignal,
   ): Promise<{ service: TelegramService; user: User }> {
     const startedAt = performance.now()
     const client = new TelegramClient({
@@ -135,7 +136,11 @@ export class TelegramService {
         password: prompts.password,
         codeSentCallback: prompts.codeSent,
         invalidCodeCallback: prompts.invalid,
+        ...(abortSignal ? { abortSignal } : {}),
       })
+      if (abortSignal?.aborted) {
+        throw new DOMException("Authentication cancelled", "AbortError")
+      }
       diagnostics.record({
         level: "info",
         operation: "auth.start",
@@ -248,7 +253,7 @@ export class TelegramService {
     const preview: MessagePreview[] = []
     try {
       for await (const message of this.client.iterHistory(chat.peer, { limit })) {
-        const own = message.isOutgoing || message.sender.id === this.selfId
+        const own = message.sender.id === this.selfId
         preview.push({
           id: message.id,
           author: own ? "You" : message.sender.displayName,
@@ -280,21 +285,25 @@ export class TelegramService {
     let deleted = 0
     let failed = 0
     const failures = new Map<number, string>()
+    const expected = chats.reduce((sum, item) => sum + item.count, 0)
 
     for (const chat of chats) {
       if (signal.aborted) break
       let batch: number[] = []
-      for await (const message of this.client.iterSearchMessages({
-        chatId: chat.peer,
-        fromUser: "self",
-        chunkSize: DELETE_BATCH_SIZE,
-      })) {
-        if (signal.aborted) break
-        batch.push(message.id)
-        if (batch.length === DELETE_BATCH_SIZE) {
+      let processedInChat = 0
+      try {
+        for await (const message of this.client.iterSearchMessages({
+          chatId: chat.peer,
+          fromUser: "self",
+          chunkSize: DELETE_BATCH_SIZE,
+        })) {
+          if (signal.aborted) break
+          batch.push(message.id)
+          if (batch.length !== DELETE_BATCH_SIZE) continue
           const result = await this.deleteBatch(chat, batch)
           deleted += result.deleted
           failed += result.failed
+          processedInChat += batch.length
           if (result.error) failures.set(chat.id, result.error)
           batch = []
           onProgress({
@@ -303,22 +312,38 @@ export class TelegramService {
             deleted,
             failed,
             processed: deleted + failed,
-            expected: chats.reduce((sum, item) => sum + item.count, 0),
+            expected,
+          })
+          if (signal.aborted) break
+        }
+        if (!signal.aborted && batch.length > 0) {
+          const result = await this.deleteBatch(chat, batch)
+          deleted += result.deleted
+          failed += result.failed
+          processedInChat += batch.length
+          if (result.error) failures.set(chat.id, result.error)
+          onProgress({
+            chatId: chat.id,
+            chatTitle: chat.title,
+            deleted,
+            failed,
+            processed: deleted + failed,
+            expected,
           })
         }
-      }
-      if (!signal.aborted && batch.length > 0) {
-        const result = await this.deleteBatch(chat, batch)
-        deleted += result.deleted
-        failed += result.failed
-        if (result.error) failures.set(chat.id, result.error)
+      } catch (error) {
+        const remaining = Math.max(0, chat.count - processedInChat)
+        failed += remaining
+        const message = userFacingError(error).message
+        failures.set(chat.id, message)
+        this.recordFailure("messages.iterate", performance.now(), error, remaining)
         onProgress({
           chatId: chat.id,
           chatTitle: chat.title,
           deleted,
           failed,
           processed: deleted + failed,
-          expected: chats.reduce((sum, item) => sum + item.count, 0),
+          expected,
         })
       }
     }

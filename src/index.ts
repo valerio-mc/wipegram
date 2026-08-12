@@ -4,6 +4,7 @@ import { WipegramApp } from "./ui"
 const renderer = await createCliRenderer({
   screenMode: "alternate-screen",
   exitOnCtrlC: false,
+  exitSignals: [],
   consoleMode: "disabled",
   openConsoleOnError: false,
   backgroundColor: "#101317",
