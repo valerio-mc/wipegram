@@ -94,6 +94,7 @@ export class TelegramService {
   private constructor(
     private readonly client: TelegramApi,
     private readonly diagnostics: Diagnostics,
+    private readonly selfId: number | null,
   ) {}
 
   static async authenticate(
@@ -141,7 +142,7 @@ export class TelegramService {
         outcome: "success",
         durationMs: elapsed(startedAt),
       })
-      return { service: new TelegramService(client, diagnostics), user }
+      return { service: new TelegramService(client, diagnostics, user.id), user }
     } catch (error) {
       diagnostics.record({
         level: "error",
@@ -155,8 +156,8 @@ export class TelegramService {
     }
   }
 
-  static fromApi(api: TelegramApi, diagnostics: Diagnostics): TelegramService {
-    return new TelegramService(api, diagnostics)
+  static fromApi(api: TelegramApi, diagnostics: Diagnostics, selfId: number | null = null): TelegramService {
+    return new TelegramService(api, diagnostics, selfId)
   }
 
   async getDialogs(): Promise<ChatSummary[]> {
@@ -247,10 +248,11 @@ export class TelegramService {
     const preview: MessagePreview[] = []
     try {
       for await (const message of this.client.iterHistory(chat.peer, { limit })) {
+        const own = message.isOutgoing || message.sender.id === this.selfId
         preview.push({
           id: message.id,
-          author: message.isOutgoing ? "You" : message.sender.displayName,
-          own: message.isOutgoing,
+          author: own ? "You" : message.sender.displayName,
+          own,
           sentAt: message.date,
           content: previewContent(message),
         })
