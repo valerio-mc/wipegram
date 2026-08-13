@@ -1,16 +1,19 @@
 <p align="center">
-  <img src="wipegram.png" alt="wipegram" width="180">
+  <img src="wipegram.png" alt="wipegram" width="360">
 </p>
 
-<h1 align="center">wipegram</h1>
+<p align="center">
+  <strong>Inspect your Telegram footprint. Remove your messages for everyone. Leave no session behind.</strong>
+</p>
 
 <p align="center">
-  A fast, ephemeral terminal interface for inspecting and removing your own Telegram messages.
+  A fast terminal interface with process-only authentication and no persistent Telegram session.
 </p>
 
 wipegram authenticates as you, lists your Telegram dialogs, progressively counts the messages you
-authored, previews recent context, and lets you select chats for batched cleanup. Destructive actions
-always require a separate confirmation step.
+authored, previews recent context, and lets you select chats for batched cleanup. It explicitly asks
+Telegram to revoke those messages for every participant, not merely hide them from your account.
+Destructive actions always require a separate confirmation step.
 
 ## Features
 
@@ -18,11 +21,11 @@ always require a separate confirmation step.
 - Telegram-side own-message counts with bounded concurrency
 - Lightweight, in-memory recent-message previews
 - Local chat search and explicit multi-chat selection
-- Batched deletion with explicit revoke semantics, progress, and cancellation
+- Batched deletion for all participants where Telegram permits it
 - Sanitized diagnostics held only in memory for live troubleshooting
-- Ephemeral authentication powered by [mtcute](https://mtcute.dev/)
+- Fully ephemeral authentication powered by [mtcute](https://mtcute.dev/), with no session files
 
-## Privacy
+## Ephemeral by design
 
 **wipegram never intentionally persists credentials or Telegram session data to disk.
 Authentication state exists only for the lifetime of the process and becomes unreachable when
@@ -34,6 +37,23 @@ identifiers, and message content are excluded from the in-app diagnostic buffer.
 
 JavaScript cannot promise cryptographic zeroization of immutable strings or physical RAM. wipegram's
 guarantee is non-persistence, not physical-memory erasure.
+
+## Get Telegram credentials
+
+wipegram needs Telegram's standard user-client credentials and verifies your account during each
+launch. Nothing needs to be added to a configuration or `.env` file.
+
+1. Sign in at [my.telegram.org](https://my.telegram.org/) with your Telegram phone number.
+2. Open **API development tools** and create an application if you do not already have one. The app
+   title and short name are labels for your own Telegram developer application.
+3. Copy the displayed **App api_id** and **App api_hash** into wipegram. Treat the `api_hash` as a
+   secret; Telegram does not provide a way to revoke it.
+4. Enter the phone number of the Telegram account you want to clean, including its country code.
+5. Enter the login code Telegram sends, usually inside the Telegram app. If the account has
+   two-step verification enabled, wipegram will also request that existing Telegram password.
+
+The `api_hash`, login code, and two-step verification password are different values. wipegram masks
+sensitive fields and never asks you to pass any of them as command-line arguments.
 
 ## Requirements
 
@@ -67,10 +87,10 @@ a new in-memory Telegram session, so Telegram authentication is required again a
 
 ## Safety
 
-Deletion is destructive. wipegram explicitly requests revocation for all participants, but Telegram
-ultimately decides whether each historical message can be removed for everyone. Failed batches are
-reported rather than counted as successful. Cancelling stops new batches after any request already in
-flight finishes.
+Deletion is destructive. **wipegram requests deletion for everyone in the conversation, not deletion
+from your local history only.** Telegram ultimately decides whether each historical message can be
+revoked for all participants. Failed batches are reported rather than counted as successful.
+Cancelling stops new batches after any request already in flight finishes.
 
 ## Tech
 
