@@ -1,8 +1,10 @@
 import {
   Box,
+  BoxRenderable,
   ImageRenderable,
   Text,
   TextAttributes,
+  TextRenderable,
   type CliRenderer,
   type KeyEvent,
   type PasteEvent,
@@ -80,7 +82,7 @@ export function calculateChatLayout(width: number, height: number, hasError: boo
   const wide = width >= 94
   const compactFooter = width < 150
   const footerHeight = (compactFooter ? 2 : 1) + (hasError ? 1 : 0)
-  const availableHeight = Math.max(1, height - 2 - 3 - footerHeight)
+  const availableHeight = Math.max(1, height - 2 - footerHeight)
   const showPreview = wide || availableHeight >= 16
   const listHeight = Math.max(
     1,
@@ -99,10 +101,18 @@ export class WipegramApp {
   ]
   readonly #previewCache = new Map<number, PreviewState>()
   readonly #selected = new Set<number>()
+  #appShell!: BoxRenderable
+  #sizeStage!: BoxRenderable
+  #onboardingStage!: BoxRenderable
+  #onboardingPanel!: BoxRenderable
+  #logoRail!: BoxRenderable
+  #logo!: ImageRenderable
+  #logoFallback!: BoxRenderable
+  #formHost!: BoxRenderable
+  #operationalStage!: BoxRenderable
   #screen: Screen = { kind: "credentials" }
   #service: TelegramService | null = null
   #activeField = 0
-  #onboardingStarted = false
   #promptValue = ""
   #pendingPrompt: PendingPrompt | null = null
   #error = ""
@@ -135,6 +145,7 @@ export class WipegramApp {
 
   async start(): Promise<void> {
     this.renderer.setTerminalTitle("wipegram")
+    this.initializeShell()
     this.renderer.keyInput.on("keypress", (key: KeyEvent) => void this.onKey(key))
     this.renderer.keyInput.on("paste", (event: PasteEvent) => this.onPaste(event))
     this.renderer.on("resize", () => this.render())
@@ -180,7 +191,6 @@ export class WipegramApp {
   }
 
   private handleCredentialsKey(key: KeyEvent): void {
-    this.#onboardingStarted = true
     if (key.name === "tab" || key.name === "down") {
       this.#activeField = (this.#activeField + 1) % this.#fields.length
     } else if (key.name === "up") {
@@ -319,10 +329,7 @@ export class WipegramApp {
   private onPaste(event: PasteEvent): void {
     const value = new TextDecoder().decode(event.bytes).replace(/[\r\n]/g, "")
     if (!value) return
-    if (this.#screen.kind === "credentials") {
-      this.#onboardingStarted = true
-      this.appendInput(value)
-    }
+    if (this.#screen.kind === "credentials") this.appendInput(value)
     else if (this.#screen.kind === "authenticating" && this.#pendingPrompt) {
       this.#promptValue += value
     } else if (this.#screen.kind === "chats" && this.#searching) {
@@ -634,59 +641,153 @@ export class WipegramApp {
   }
 
   private render(): void {
-    for (const child of this.renderer.root.getChildren()) child.destroyRecursively()
-    if (this.renderer.width < 60 || this.renderer.height < 18) {
-      this.renderer.root.add(
-        Box(
-          { width: "100%", height: "100%", alignItems: "center", justifyContent: "center" },
-          Text({ content: "wipegram needs at least 60 x 18 columns", fg: colors.muted }),
-        ),
-      )
-      return
+    const tooSmall = this.renderer.width < 60 || this.renderer.height < 18
+    const onboarding = this.#screen.kind === "credentials" || this.#screen.kind === "authenticating"
+    this.#sizeStage.visible = tooSmall
+    this.#onboardingStage.visible = !tooSmall && onboarding
+    this.#operationalStage.visible = !tooSmall && !onboarding
+    if (tooSmall) return
+
+    if (onboarding) this.renderOnboarding()
+    else {
+      this.clearHost(this.#operationalStage)
+      const content =
+        this.#screen.kind === "chats"
+          ? this.renderChats()
+          : this.#screen.kind === "confirm"
+            ? this.renderConfirmation()
+            : this.#screen.kind === "deleting"
+              ? this.renderDeleting()
+              : this.#screen.kind === "result"
+                ? this.renderResult(this.#screen.result)
+                : this.renderDiagnostics()
+      this.#operationalStage.add(content)
     }
-
-    const content =
-      this.#screen.kind === "credentials"
-        ? this.renderCredentials()
-        : this.#screen.kind === "authenticating"
-          ? this.renderAuthenticating()
-          : this.#screen.kind === "chats"
-            ? this.renderChats()
-            : this.#screen.kind === "confirm"
-              ? this.renderConfirmation()
-              : this.#screen.kind === "deleting"
-                ? this.renderDeleting()
-                : this.#screen.kind === "result"
-                  ? this.renderResult(this.#screen.result)
-                  : this.renderDiagnostics()
-
-    this.renderer.root.add(
-      Box(
-        {
-          width: "100%",
-          height: "100%",
-          padding: 1,
-          flexDirection: "column",
-          backgroundColor: colors.background,
-        },
-        this.header(),
-        content,
-      ),
-    )
   }
 
-  private header() {
-    return Box(
-      { height: 3, flexShrink: 0, paddingX: 1 },
-      Text({
+  private initializeShell(): void {
+    this.#appShell = new BoxRenderable(this.renderer, {
+      id: "app-shell",
+      width: "100%",
+      height: "100%",
+      padding: 1,
+      backgroundColor: colors.background,
+    })
+    this.#sizeStage = new BoxRenderable(this.renderer, {
+      id: "size-stage",
+      width: "100%",
+      height: "100%",
+      alignItems: "center",
+      justifyContent: "center",
+    })
+    this.#sizeStage.add(Text({ content: "wipegram needs at least 60 x 18 columns", fg: colors.muted }))
+
+    this.#onboardingStage = new BoxRenderable(this.renderer, {
+      id: "onboarding-stage",
+      width: "100%",
+      height: "100%",
+      alignItems: "center",
+      justifyContent: "center",
+    })
+    this.#onboardingPanel = new BoxRenderable(this.renderer, {
+      id: "onboarding-panel",
+      borderStyle: "rounded",
+      borderColor: colors.border,
+      backgroundColor: colors.panel,
+      overflow: "hidden",
+    })
+    this.#logoRail = new BoxRenderable(this.renderer, {
+      id: "logo-rail",
+      width: 34,
+      height: "100%",
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: colors.background,
+    })
+    this.#logoFallback = new BoxRenderable(this.renderer, {
+      id: "logo-fallback",
+      width: "100%",
+      alignItems: "center",
+      flexDirection: "column",
+      visible: false,
+    })
+    this.#logoFallback.add(
+      new TextRenderable(this.renderer, {
         content: "wipegram",
         fg: colors.accent,
         attributes: TextAttributes.BOLD,
       }),
     )
+    this.#logoFallback.add(
+      new TextRenderable(this.renderer, {
+        content: "Private Telegram cleanup",
+        fg: colors.muted,
+        marginTop: 1,
+      }),
+    )
+    this.#logo = new ImageRenderable(this.renderer, {
+      id: "wipegram-logo",
+      source: LOGO_SOURCE,
+      width: 28,
+      height: 14,
+      fit: "fit",
+      protocol: "auto",
+      onLoad: () => {
+        this.#diagnostics.record({
+          level: "info",
+          operation: "ui.logo",
+          outcome: "ready",
+          code: this.#logo.effectiveProtocol.toUpperCase(),
+        })
+      },
+      onError: () => {
+        this.#logo.visible = false
+        this.#logoFallback.visible = true
+        this.#diagnostics.record({
+          level: "warn",
+          operation: "ui.logo",
+          outcome: "unavailable",
+          code: "IMAGE_LOAD_FAILED",
+        })
+      },
+    })
+    this.#logoRail.add(this.#logo)
+    this.#logoRail.add(this.#logoFallback)
+    this.#formHost = new BoxRenderable(this.renderer, {
+      id: "form-host",
+      height: "100%",
+      flexDirection: "column",
+    })
+    this.#onboardingPanel.add(this.#logoRail)
+    this.#onboardingPanel.add(this.#formHost)
+    this.#onboardingStage.add(this.#onboardingPanel)
+
+    this.#operationalStage = new BoxRenderable(this.renderer, {
+      id: "operational-stage",
+      width: "100%",
+      height: "100%",
+      flexDirection: "column",
+    })
+    this.#appShell.add(this.#sizeStage)
+    this.#appShell.add(this.#onboardingStage)
+    this.#appShell.add(this.#operationalStage)
+    this.renderer.root.add(this.#appShell)
   }
 
-  private renderCredentials() {
+  private renderOnboarding(): void {
+    const spacious = this.renderer.width >= 104 && this.renderer.height >= 30
+    this.#onboardingPanel.width = spacious ? 100 : Math.min(64, this.renderer.width - 4)
+    this.#onboardingPanel.height = spacious ? 26 : Math.min(16, this.renderer.height - 2)
+    this.#onboardingPanel.flexDirection = spacious ? "row" : "column"
+    this.#logoRail.visible = spacious
+    this.#formHost.width = spacious ? 64 : "100%"
+    this.#formHost.padding = spacious ? 2 : 1
+    this.clearHost(this.#formHost)
+    const content = this.#screen.kind === "credentials" ? this.renderCredentialFields(spacious) : this.renderAuthenticationPrompt()
+    for (const child of content) this.#formHost.add(child)
+  }
+
+  private renderCredentialFields(spacious: boolean): VChild[] {
     const fields = this.#fields.map((field, index) => {
       const active = index === this.#activeField
       const value = field.value
@@ -694,93 +795,58 @@ export class WipegramApp {
           ? "•".repeat(Math.min(field.value.length, 32))
           : field.value
         : field.placeholder
-      return Box(
-        { flexDirection: "column", gap: 0, marginBottom: 1 },
-        Text({ content: field.label.toUpperCase(), fg: active ? colors.accent : colors.muted }),
-        Box(
-          {
-            height: 3,
-            borderStyle: "rounded",
-            borderColor: active ? colors.accent : colors.border,
-            backgroundColor: active ? colors.panelActive : colors.panel,
-            paddingX: 1,
-          },
-          Text({ content: `${value}${active ? "▌" : ""}`, fg: field.value ? colors.text : colors.muted }),
-        ),
-      )
-    })
-    const showLogo = !this.#onboardingStarted && this.renderer.height >= 42
-    return Box(
-      { flexGrow: 1, alignItems: "center", justifyContent: "center", flexDirection: "column", gap: showLogo ? 1 : 0 },
-      ...(showLogo
-        ? [
-            new ImageRenderable(this.renderer, {
-              id: "wipegram-logo",
-              source: LOGO_SOURCE,
-              width: 26,
-              height: 9,
-              fit: "fit",
-              protocol: "auto",
-              onError: () => {
-                this.#diagnostics.record({
-                  level: "warn",
-                  operation: "ui.logo",
-                  outcome: "unavailable",
-                  code: "IMAGE_LOAD_FAILED",
-                })
-              },
-            }),
-          ]
-        : []),
-      Box(
+      const input = Box(
         {
-          width: Math.min(64, this.renderer.width - 8),
-          flexDirection: "column",
+          height: 3,
           borderStyle: "rounded",
-          borderColor: colors.border,
-          backgroundColor: colors.panel,
-          padding: 2,
+          borderColor: active ? colors.accent : colors.border,
+          backgroundColor: active ? colors.panelActive : colors.panel,
+          paddingX: 1,
+          ...(spacious ? {} : { title: field.label.toUpperCase(), titleColor: active ? colors.accent : colors.muted }),
         },
-        Text({ content: "Connect your Telegram account", fg: colors.text, attributes: TextAttributes.BOLD }),
-        Text({ content: "Nothing entered here is written to disk.", fg: colors.muted, marginBottom: 2 }),
-        ...fields,
-        Text({ content: "Tab / ↑↓ move   Enter continue   ? diagnostics", fg: colors.muted }),
-        ...(this.#error ? [Text({ content: this.#error, fg: colors.danger, marginTop: 1 })] : []),
-      ),
-    )
+        Text({ content: `${value}${active ? "▌" : ""}`, fg: field.value ? colors.text : colors.muted }),
+      )
+      return spacious
+        ? Box(
+            { flexDirection: "column", marginBottom: 1 },
+            Text({ content: field.label.toUpperCase(), fg: active ? colors.accent : colors.muted }),
+            input,
+          )
+        : input
+    })
+    return [
+      Text({ content: "Connect your Telegram account", fg: colors.text, attributes: TextAttributes.BOLD }),
+      Text({ content: this.#error || "Nothing entered here is written to disk.", fg: this.#error ? colors.danger : colors.muted, marginBottom: spacious ? 2 : 0 }),
+      ...fields,
+      Text({ content: "Tab / ↑↓ move   Enter continue   ? diagnostics", fg: colors.muted }),
+    ]
   }
 
-  private renderAuthenticating() {
+  private renderAuthenticationPrompt(): VChild[] {
     const prompt = this.#screen.kind === "authenticating" ? this.#screen.prompt : undefined
     const shown = prompt
       ? prompt === "password"
         ? "•".repeat(this.#promptValue.length)
         : this.#promptValue
       : ""
-    return Box(
-      { flexGrow: 1, alignItems: "center", justifyContent: "center" },
-      Box(
-        {
-          width: 58,
-          borderStyle: "rounded",
-          borderColor: prompt ? colors.accent : colors.border,
-          backgroundColor: colors.panel,
-          padding: 2,
-          flexDirection: "column",
-        },
-        Text({ content: this.#screen.kind === "authenticating" ? this.#screen.message : "", fg: colors.text }),
-        ...(prompt
-          ? [
-              Box(
-                { height: 3, borderStyle: "rounded", borderColor: colors.accent, paddingX: 1, marginTop: 1 },
-                Text({ content: `${shown}▌`, fg: colors.text }),
-              ),
-              Text({ content: "Paste works   Enter submit", fg: colors.muted, marginTop: 1 }),
-            ]
-          : [Text({ content: "Waiting for Telegram...", fg: colors.accent, marginTop: 1 })]),
-        ...(this.#error ? [Text({ content: this.#error, fg: colors.danger, marginTop: 1 })] : []),
-      ),
-    )
+    return [
+      Text({ content: this.#screen.kind === "authenticating" ? this.#screen.message : "", fg: colors.text, attributes: TextAttributes.BOLD }),
+      ...(prompt
+        ? [
+            Box(
+              { height: 3, borderStyle: "rounded", borderColor: colors.accent, paddingX: 1, marginTop: 1 },
+              Text({ content: `${shown}▌`, fg: colors.text }),
+            ),
+            ...(this.#error ? [Text({ content: this.#error, fg: colors.danger, marginTop: 1 })] : []),
+            Text({ content: "Paste works   Enter submit", fg: colors.muted, marginTop: 1 }),
+          ]
+        : [Text({ content: "Waiting for Telegram...", fg: colors.accent, marginTop: 1 })]),
+      ...(!prompt && this.#error ? [Text({ content: this.#error, fg: colors.danger, marginTop: 1 })] : []),
+    ]
+  }
+
+  private clearHost(host: BoxRenderable): void {
+    for (const child of host.getChildren()) child.destroyRecursively()
   }
 
   private renderChats() {
