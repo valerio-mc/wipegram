@@ -10,6 +10,11 @@ import {
 } from "@mtcute/bun"
 import type { Diagnostics } from "./diagnostics"
 
+interface HistoryOffset {
+  id: number
+  date: number
+}
+
 export interface TelegramCredentials {
   apiId: number
   apiHash: string
@@ -40,6 +45,11 @@ export interface MessagePreview {
   readonly own: boolean
   readonly sentAt: Date
   readonly content: string
+}
+
+export interface MessagePreviewPage {
+  readonly messages: MessagePreview[]
+  readonly next?: HistoryOffset
 }
 
 export interface CountProgress {
@@ -78,7 +88,10 @@ interface TelegramApi {
     fromUser: "self"
     chunkSize: number
   }): AsyncIterableIterator<Message>
-  iterHistory(chatId: InputPeerLike, params: { limit: number }): AsyncIterableIterator<Message>
+  getHistory(
+    chatId: InputPeerLike,
+    params: { limit: number; offset?: HistoryOffset },
+  ): Promise<ArrayLike<Message> & { next?: HistoryOffset }>
   deleteMessagesById(
     chatId: InputPeerLike,
     ids: number[],
@@ -248,11 +261,19 @@ export class TelegramService {
     )
   }
 
-  async getRecentMessages(chat: ChatSummary, limit = 8): Promise<MessagePreview[]> {
+  async getRecentMessages(
+    chat: ChatSummary,
+    limit = 15,
+    offset?: HistoryOffset,
+  ): Promise<MessagePreviewPage> {
     const startedAt = performance.now()
     const preview: MessagePreview[] = []
     try {
-      for await (const message of this.client.iterHistory(chat.peer, { limit })) {
+      const history = await this.client.getHistory(chat.peer, {
+        limit,
+        ...(offset ? { offset } : {}),
+      })
+      for (const message of Array.from(history)) {
         const own = message.sender.id === this.selfId
         preview.push({
           id: message.id,
@@ -270,7 +291,7 @@ export class TelegramService {
         durationMs: elapsed(startedAt),
         count: preview.length,
       })
-      return preview
+      return { messages: preview, ...(history.next ? { next: history.next } : {}) }
     } catch (error) {
       this.recordFailure("messages.preview", startedAt, error)
       throw userFacingError(error)

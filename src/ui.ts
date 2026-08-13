@@ -1,5 +1,6 @@
 import {
   Box,
+  ImageRenderable,
   Text,
   TextAttributes,
   type CliRenderer,
@@ -14,6 +15,7 @@ import {
   type DeleteProgress,
   type DeleteResult,
   type MessagePreview,
+  type MessagePreviewPage,
 } from "./telegram"
 
 const colors = {
@@ -39,6 +41,10 @@ interface Field {
 interface ChatRow extends ChatSummary {
   count?: number | null
   countError?: string
+}
+
+interface PreviewState extends MessagePreviewPage {
+  cursor: number
 }
 
 type Screen =
@@ -67,6 +73,8 @@ interface ChatLayout {
 const CHAT_ROW_HEIGHT = 2
 const LIST_CHROME_HEIGHT = 4
 const STACKED_PREVIEW_HEIGHT = 7
+const PREVIEW_PAGE_SIZE = 15
+const LOGO_SOURCE = new URL("../wipegram.png", import.meta.url)
 
 export function calculateChatLayout(width: number, height: number, hasError: boolean): ChatLayout {
   const wide = width >= 94
@@ -89,11 +97,12 @@ export class WipegramApp {
     { label: "API hash", placeholder: "From my.telegram.org", value: "", masked: true },
     { label: "Phone", placeholder: "+39 333 123 4567", value: "", masked: false },
   ]
-  readonly #previewCache = new Map<number, MessagePreview[]>()
+  readonly #previewCache = new Map<number, PreviewState>()
   readonly #selected = new Set<number>()
   #screen: Screen = { kind: "credentials" }
   #service: TelegramService | null = null
   #activeField = 0
+  #onboardingStarted = false
   #promptValue = ""
   #pendingPrompt: PendingPrompt | null = null
   #error = ""
@@ -103,7 +112,13 @@ export class WipegramApp {
   #search = ""
   #searching = false
   #preview: MessagePreview[] = []
+  #previewNext: MessagePreviewPage["next"]
+  #previewCursor = 0
+  #previewFocused = false
+  #previewError = ""
   #previewLoading = false
+  #previewNavigating = false
+  #previewPendingDelta = 0
   #previewToken = 0
   #countAbort: AbortController | null = null
   #authAbort: AbortController | null = null
@@ -165,6 +180,7 @@ export class WipegramApp {
   }
 
   private handleCredentialsKey(key: KeyEvent): void {
+    this.#onboardingStarted = true
     if (key.name === "tab" || key.name === "down") {
       this.#activeField = (this.#activeField + 1) % this.#fields.length
     } else if (key.name === "up") {
@@ -220,6 +236,22 @@ export class WipegramApp {
       return
     }
 
+    if (this.#previewFocused) {
+      if (key.name === "escape" || key.name === "return") {
+        this.#previewFocused = false
+      } else if (key.name === "up" || key.name === "k") {
+        await this.movePreviewCursor(-1)
+      } else if (key.name === "down" || key.name === "j") {
+        await this.movePreviewCursor(1)
+      } else if (key.name === "pageup") {
+        await this.movePreviewCursor(-this.previewPageSize())
+      } else if (key.name === "pagedown") {
+        await this.movePreviewCursor(this.previewPageSize())
+      }
+      this.render()
+      return
+    }
+
     const visible = this.visibleChats()
     const pageSize = this.chatLayout().pageSize
     if (key.name === "up" || key.name === "k") {
@@ -242,7 +274,7 @@ export class WipegramApp {
         this.#selected.add(chat.id)
       }
     } else if (key.name === "return") {
-      await this.loadPreview(true)
+      if (this.chatLayout().showPreview) this.#previewFocused = true
     } else if (key.name === "/") {
       this.#searching = true
     } else if (key.name.toLowerCase() === "d" && this.selectedChats().length > 0) {
@@ -287,7 +319,10 @@ export class WipegramApp {
   private onPaste(event: PasteEvent): void {
     const value = new TextDecoder().decode(event.bytes).replace(/[\r\n]/g, "")
     if (!value) return
-    if (this.#screen.kind === "credentials") this.appendInput(value)
+    if (this.#screen.kind === "credentials") {
+      this.#onboardingStarted = true
+      this.appendInput(value)
+    }
     else if (this.#screen.kind === "authenticating" && this.#pendingPrompt) {
       this.#promptValue += value
     } else if (this.#screen.kind === "chats" && this.#searching) {
@@ -365,7 +400,14 @@ export class WipegramApp {
     this.#countAbort?.abort()
     this.#countAbort = new AbortController()
     this.#previewCache.clear()
+    this.#previewToken += 1
     this.#preview = []
+    this.#previewNext = undefined
+    this.#previewCursor = 0
+    this.#previewFocused = false
+    this.#previewError = ""
+    this.#previewLoading = false
+    this.#previewPendingDelta = 0
     this.#analyzed = 0
     this.render()
     try {
@@ -422,26 +464,115 @@ export class WipegramApp {
     const token = ++this.#previewToken
     const cached = this.#previewCache.get(chat.id)
     if (cached && !force) {
-      this.#preview = cached
+      this.applyPreviewState(cached)
+      this.#previewError = ""
       this.#previewLoading = false
       this.render()
       return
     }
+    this.#preview = []
+    this.#previewNext = undefined
+    this.#previewCursor = 0
+    this.#previewError = ""
     this.#previewLoading = true
     this.render()
     try {
-      const preview = await this.#service.getRecentMessages(chat)
-      this.#previewCache.set(chat.id, preview)
-      if (token === this.#previewToken) this.#preview = preview
+      const page = await this.#service.getRecentMessages(chat, PREVIEW_PAGE_SIZE)
+      const state: PreviewState = {
+        ...page,
+        cursor: Math.max(0, page.messages.length - 1),
+      }
+      if (token === this.#previewToken) {
+        this.#previewCache.set(chat.id, state)
+        this.applyPreviewState(state)
+      }
     } catch (error) {
       if (token === this.#previewToken) {
         this.#preview = []
-        this.#error = error instanceof Error ? error.message : "Unable to load preview"
+        this.#previewNext = undefined
+        this.#previewCursor = 0
+        this.#previewError = error instanceof Error ? error.message : "Unable to load preview"
       }
     } finally {
       if (token === this.#previewToken) this.#previewLoading = false
       this.render()
     }
+  }
+
+  private applyPreviewState(state: PreviewState): void {
+    this.#preview = state.messages
+    this.#previewNext = state.next
+    this.#previewCursor = state.cursor
+  }
+
+  private previewPageSize(): number {
+    const height = this.chatLayout().wide ? this.chatLayout().bodyHeight : STACKED_PREVIEW_HEIGHT
+    return Math.max(1, Math.floor((height - LIST_CHROME_HEIGHT) / 2))
+  }
+
+  private async movePreviewCursor(delta: number): Promise<void> {
+    const chatId = this.visibleChats()[this.#cursor]?.id
+    if (chatId === undefined) return
+    this.#previewPendingDelta += delta
+    if (this.#previewNavigating) return
+    this.#previewNavigating = true
+    try {
+      while (this.#previewPendingDelta !== 0) {
+        const pending = this.#previewPendingDelta
+        this.#previewPendingDelta = 0
+        let cursor = this.#previewCursor
+        if (pending < 0 && cursor + pending < 0 && this.#previewNext) {
+          cursor += await this.loadOlderPreview()
+        }
+        if (this.visibleChats()[this.#cursor]?.id !== chatId) {
+          this.#previewPendingDelta = 0
+          return
+        }
+        this.#previewCursor = Math.max(
+          0,
+          Math.min(Math.max(this.#preview.length - 1, 0), cursor + pending),
+        )
+        this.updateCachedPreviewCursor()
+      }
+    } finally {
+      this.#previewNavigating = false
+    }
+  }
+
+  private async loadOlderPreview(): Promise<number> {
+    const chat = this.visibleChats()[this.#cursor]
+    const offset = this.#previewNext
+    if (!chat || !offset || !this.#service || this.#previewLoading) return 0
+    const token = ++this.#previewToken
+    this.#previewError = ""
+    this.#previewLoading = true
+    this.render()
+    try {
+      const page = await this.#service.getRecentMessages(chat, PREVIEW_PAGE_SIZE, offset)
+      if (token !== this.#previewToken) return 0
+      const loadedIds = new Set(this.#preview.map((message) => message.id))
+      const older = page.messages.filter((message) => !loadedIds.has(message.id))
+      this.#preview = [...older, ...this.#preview]
+      this.#previewNext = page.next
+      return older.length
+    } catch (error) {
+      if (token === this.#previewToken) {
+        this.#previewError = error instanceof Error ? error.message : "Unable to load older messages"
+      }
+    } finally {
+      if (token === this.#previewToken) this.#previewLoading = false
+    }
+    return 0
+  }
+
+  private updateCachedPreviewCursor(): void {
+    const chat = this.visibleChats()[this.#cursor]
+    if (!chat) return
+    this.#previewCache.set(chat.id, {
+      messages: this.#preview,
+      ...(this.#previewNext ? { next: this.#previewNext } : {}),
+      cursor: this.#previewCursor,
+    })
   }
 
   private async beginDeletion(): Promise<void> {
@@ -578,8 +709,29 @@ export class WipegramApp {
         ),
       )
     })
+    const showLogo = !this.#onboardingStarted && this.renderer.height >= 42
     return Box(
-      { flexGrow: 1, alignItems: "center", justifyContent: "center" },
+      { flexGrow: 1, alignItems: "center", justifyContent: "center", flexDirection: "column", gap: showLogo ? 1 : 0 },
+      ...(showLogo
+        ? [
+            new ImageRenderable(this.renderer, {
+              id: "wipegram-logo",
+              source: LOGO_SOURCE,
+              width: 26,
+              height: 9,
+              fit: "fit",
+              protocol: "auto",
+              onError: () => {
+                this.#diagnostics.record({
+                  level: "warn",
+                  operation: "ui.logo",
+                  outcome: "unavailable",
+                  code: "IMAGE_LOAD_FAILED",
+                })
+              },
+            }),
+          ]
+        : []),
       Box(
         {
           width: Math.min(64, this.renderer.width - 8),
@@ -633,6 +785,7 @@ export class WipegramApp {
 
   private renderChats() {
     const layout = this.chatLayout()
+    if (!layout.showPreview) this.#previewFocused = false
     const { wide } = layout
     const visible = this.visibleChats()
     this.#cursor = Math.min(this.#cursor, Math.max(visible.length - 1, 0))
@@ -678,6 +831,7 @@ export class WipegramApp {
         onMouseScroll: (event) => {
           const direction = event.scroll?.direction
           if (direction !== "up" && direction !== "down") return
+          this.#previewFocused = false
           const amount = Math.min(5, Math.max(1, Math.round(event.scroll?.delta ?? 1)))
           this.moveChatCursor(direction === "down" ? amount : -amount)
           event.stopPropagation()
@@ -696,9 +850,11 @@ export class WipegramApp {
     const summary = selected
       ? `${selected} selected · ${formatNumber(this.selectedTotal())} messages`
       : `${visible.length} chats shown · ${this.#analyzed}/${this.#chats.length} analyzed${hiddenEmpty ? ` · ${hiddenEmpty} empty hidden` : ""}`
-    const controls = this.renderer.width >= 150
-      ? "↑↓ move  PgUp/PgDn page  Space select  / search  D delete  R refresh  ? logs  Q quit"
-      : "↑↓ move  PgUp/PgDn page  Space select  / search  D delete  Q quit"
+    const controls = this.#previewFocused
+      ? "Preview: ↑↓ scroll  PgUp/PgDn page  Esc/Enter return"
+      : this.renderer.width >= 150
+        ? "↑↓ move  PgUp/PgDn page  Enter preview  Space select  / search  D delete  R refresh  ? logs  Q quit"
+        : "↑↓ move  Enter preview  Space select  / search  D delete  Q quit"
     return Box(
       { flexGrow: 1, flexDirection: "column" },
       body,
@@ -727,9 +883,14 @@ export class WipegramApp {
         Text({ content: "Preview", fg: colors.muted }),
       )
     }
-    const messages = this.#preview.slice(wide ? -8 : -2).flatMap((message) => [
+    const pageSize = this.previewPageSize()
+    const start = Math.max(
+      0,
+      Math.min(this.#previewCursor - Math.floor(pageSize / 2), this.#preview.length - pageSize),
+    )
+    const messages = this.#preview.slice(start, start + pageSize).flatMap((message, offset) => [
       Text({
-        content: `${message.own ? "You" : truncate(message.author, 18)} · ${formatTime(message.sentAt)}`,
+        content: `${this.#previewFocused && start + offset === this.#previewCursor ? "› " : "  "}${message.own ? "You" : truncate(message.author, 18)} · ${formatTime(message.sentAt)}`,
         fg: message.own ? colors.own : colors.accent,
       }),
       Text({ content: truncate(message.content, wide ? 48 : this.renderer.width - 12), fg: colors.text }),
@@ -739,15 +900,29 @@ export class WipegramApp {
         width: wide ? "45%" : "100%",
         height,
         borderStyle: "rounded",
-        borderColor: colors.border,
-        title: ` Preview · ${truncate(chat.title, 24)} `,
-        titleColor: colors.text,
+        borderColor: this.#previewFocused ? colors.accent : colors.border,
+        title: ` Preview · ${truncate(chat.title, 20)}${this.#previewLoading && this.#preview.length ? " · loading older…" : this.#previewError && this.#preview.length ? " · history unavailable" : this.#previewFocused ? this.#previewNext ? " · ↑ older" : " · focused" : ""} `,
+        titleColor: this.#previewError && this.#preview.length ? colors.danger : this.#previewFocused ? colors.accent : colors.text,
         padding: 1,
         flexDirection: "column",
         overflow: "hidden",
+        onMouseDown: (event) => {
+          this.#previewFocused = true
+          event.stopPropagation()
+          this.render()
+        },
+        onMouseScroll: (event) => {
+          const direction = event.scroll?.direction
+          if (direction !== "up" && direction !== "down") return
+          this.#previewFocused = true
+          void this.movePreviewCursor(direction === "up" ? -1 : 1).then(() => this.render())
+          event.stopPropagation()
+        },
       },
-      ...(this.#previewLoading
+      ...(this.#previewLoading && !this.#preview.length
         ? [Text({ content: "Loading recent context...", fg: colors.muted })]
+        : this.#previewError && !messages.length
+          ? [Text({ content: this.#previewError, fg: colors.danger })]
         : messages.length > 0
           ? messages
           : [Text({ content: "No recent messages to preview.", fg: colors.muted })]),
