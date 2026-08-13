@@ -55,6 +55,33 @@ interface PendingPrompt {
   resolve(value: string): void
 }
 
+interface ChatLayout {
+  wide: boolean
+  showPreview: boolean
+  bodyHeight: number
+  listHeight: number
+  pageSize: number
+  footerHeight: number
+}
+
+const CHAT_ROW_HEIGHT = 2
+const LIST_CHROME_HEIGHT = 4
+const STACKED_PREVIEW_HEIGHT = 7
+
+export function calculateChatLayout(width: number, height: number, hasError: boolean): ChatLayout {
+  const wide = width >= 94
+  const compactFooter = width < 150
+  const footerHeight = (compactFooter ? 2 : 1) + (hasError ? 1 : 0)
+  const availableHeight = Math.max(1, height - 2 - 3 - footerHeight)
+  const showPreview = wide || availableHeight >= 16
+  const listHeight = Math.max(
+    1,
+    wide || !showPreview ? availableHeight : availableHeight - STACKED_PREVIEW_HEIGHT - 1,
+  )
+  const pageSize = Math.max(1, Math.floor((listHeight - LIST_CHROME_HEIGHT) / CHAT_ROW_HEIGHT))
+  return { wide, showPreview, bodyHeight: availableHeight, listHeight, pageSize, footerHeight }
+}
+
 export class WipegramApp {
   readonly #diagnostics = new Diagnostics()
   readonly #fields: Field[] = [
@@ -70,7 +97,6 @@ export class WipegramApp {
   #promptValue = ""
   #pendingPrompt: PendingPrompt | null = null
   #error = ""
-  #status = "Credentials stay in process memory only."
   #chats: ChatRow[] = []
   #analyzed = 0
   #cursor = 0
@@ -106,7 +132,6 @@ export class WipegramApp {
     if (key.ctrl && key.name === "c") {
       if (this.#screen.kind === "deleting") {
         this.#deleteAbort?.abort()
-        this.#status = "Stopping after the current Telegram request..."
         this.render()
       } else {
         await this.close()
@@ -196,17 +221,25 @@ export class WipegramApp {
     }
 
     const visible = this.visibleChats()
+    const pageSize = this.chatLayout().pageSize
     if (key.name === "up" || key.name === "k") {
-      this.#cursor = Math.max(0, this.#cursor - 1)
-      void this.loadPreview()
+      this.moveChatCursor(-1)
     } else if (key.name === "down" || key.name === "j") {
-      this.#cursor = Math.min(Math.max(visible.length - 1, 0), this.#cursor + 1)
-      void this.loadPreview()
+      this.moveChatCursor(1)
+    } else if (key.name === "pageup") {
+      this.moveChatCursor(-pageSize)
+    } else if (key.name === "pagedown") {
+      this.moveChatCursor(pageSize)
+    } else if (key.name === "home") {
+      this.moveChatCursor(-this.#cursor)
+    } else if (key.name === "end") {
+      this.moveChatCursor(visible.length - 1 - this.#cursor)
     } else if (key.name === "space") {
       const chat = visible[this.#cursor]
-      if (chat) {
-        if (this.#selected.has(chat.id)) this.#selected.delete(chat.id)
-        else this.#selected.add(chat.id)
+      if (chat && this.#selected.has(chat.id)) {
+        this.#selected.delete(chat.id)
+      } else if (chat && typeof chat.count === "number" && chat.count > 0) {
+        this.#selected.add(chat.id)
       }
     } else if (key.name === "return") {
       await this.loadPreview(true)
@@ -295,15 +328,12 @@ export class WipegramApp {
           invalid: (kind) => {
             this.#error = kind === "code" ? "Incorrect login code" : "Incorrect password"
           },
-          codeSent: () => {
-            this.#status = "Telegram sent a login code."
-          },
+          codeSent: () => {},
         },
         this.#diagnostics,
         this.#authAbort.signal,
       )
       this.#service = authenticated.service
-      this.#status = `Signed in as ${authenticated.user.displayName}`
       this.#screen = { kind: "chats" }
       await this.refresh()
     } catch (error) {
@@ -337,7 +367,6 @@ export class WipegramApp {
     this.#previewCache.clear()
     this.#preview = []
     this.#analyzed = 0
-    this.#status = "Loading Telegram dialogs..."
     this.render()
     try {
       const selectedBefore = new Set(this.#selected)
@@ -347,7 +376,6 @@ export class WipegramApp {
       this.#selected.clear()
       for (const chat of this.#chats) if (selectedBefore.has(chat.id)) this.#selected.add(chat.id)
       this.#cursor = Math.min(this.#cursor, Math.max(this.#chats.length - 1, 0))
-      this.#status = `Analyzing 0 / ${this.#chats.length} chats`
       this.render()
       void this.loadPreview()
       await this.#service.countOwnMessages(
@@ -361,9 +389,9 @@ export class WipegramApp {
             else delete chat.countError
           }
           this.#analyzed = progress.analyzed
-          this.#status = `Analyzed ${progress.analyzed} / ${progress.total} chats`
           this.sortChats()
           this.render()
+          if (progress.analyzed === progress.total) void this.loadPreview()
         },
         this.#countAbort.signal,
       )
@@ -391,6 +419,7 @@ export class WipegramApp {
   private async loadPreview(force = false): Promise<void> {
     const chat = this.visibleChats()[this.#cursor]
     if (!chat || !this.#service) return
+    const token = ++this.#previewToken
     const cached = this.#previewCache.get(chat.id)
     if (cached && !force) {
       this.#preview = cached
@@ -398,7 +427,6 @@ export class WipegramApp {
       this.render()
       return
     }
-    const token = ++this.#previewToken
     this.#previewLoading = true
     this.render()
     try {
@@ -441,12 +469,29 @@ export class WipegramApp {
 
   private visibleChats(): ChatRow[] {
     const query = this.#search.trim().toLocaleLowerCase()
-    if (!query) return this.#chats
+    const hideEmpty = this.#analyzed === this.#chats.length
     return this.#chats.filter(
       (chat) =>
+        (!hideEmpty || chat.count !== 0) &&
+        (!query ||
         chat.title.toLocaleLowerCase().includes(query) ||
-        chat.username?.toLocaleLowerCase().includes(query),
+          chat.username?.toLocaleLowerCase().includes(query)),
     )
+  }
+
+  private hiddenEmptyCount(): number {
+    if (this.#analyzed !== this.#chats.length) return 0
+    return this.#chats.reduce((total, chat) => total + (chat.count === 0 ? 1 : 0), 0)
+  }
+
+  private chatLayout(): ChatLayout {
+    return calculateChatLayout(this.renderer.width, this.renderer.height, Boolean(this.#error))
+  }
+
+  private moveChatCursor(delta: number): void {
+    const lastIndex = Math.max(this.visibleChats().length - 1, 0)
+    this.#cursor = Math.max(0, Math.min(lastIndex, this.#cursor + delta))
+    void this.loadPreview()
   }
 
   private selectedChats(): ChatRow[] {
@@ -501,13 +546,12 @@ export class WipegramApp {
 
   private header() {
     return Box(
-      { height: 3, flexDirection: "row", justifyContent: "space-between", paddingX: 1 },
+      { height: 3, flexShrink: 0, paddingX: 1 },
       Text({
         content: "wipegram",
         fg: colors.accent,
         attributes: TextAttributes.BOLD,
       }),
-      Text({ content: "EPHEMERAL TELEGRAM CLEANUP", fg: colors.muted }),
     )
   }
 
@@ -588,11 +632,15 @@ export class WipegramApp {
   }
 
   private renderChats() {
-    const wide = this.renderer.width >= 94
+    const layout = this.chatLayout()
+    const { wide } = layout
     const visible = this.visibleChats()
-    const listHeight = Math.max(7, this.renderer.height - (wide ? 10 : 18))
-    const start = Math.max(0, Math.min(this.#cursor - Math.floor(listHeight / 2), visible.length - listHeight))
-    const rows = visible.slice(start, start + listHeight).map((chat, offset) => {
+    this.#cursor = Math.min(this.#cursor, Math.max(visible.length - 1, 0))
+    const start = Math.max(
+      0,
+      Math.min(this.#cursor - Math.floor(layout.pageSize / 2), visible.length - layout.pageSize),
+    )
+    const rows = visible.slice(start, start + layout.pageSize).map((chat, offset) => {
       const index = start + offset
       const active = index === this.#cursor
       const count = chat.count === undefined ? "…" : chat.count === null ? "!" : formatNumber(chat.count)
@@ -618,34 +666,54 @@ export class WipegramApp {
     const list = Box(
       {
         width: wide ? "55%" : "100%",
-        flexGrow: 1,
+        height: layout.listHeight,
+        minHeight: 0,
+        overflow: "hidden",
         borderStyle: "rounded",
         borderColor: colors.border,
         title: this.#searching ? ` Chats · /${this.#search}▌ ` : " Chats ",
         titleColor: this.#searching ? colors.accent : colors.text,
         padding: 1,
         flexDirection: "column",
+        onMouseScroll: (event) => {
+          const direction = event.scroll?.direction
+          if (direction !== "up" && direction !== "down") return
+          const amount = Math.min(5, Math.max(1, Math.round(event.scroll?.delta ?? 1)))
+          this.moveChatCursor(direction === "down" ? amount : -amount)
+          event.stopPropagation()
+          this.render()
+        },
       },
       ...(rows.length > 0 ? rows : [Text({ content: "No chats match this search.", fg: colors.muted })]),
     )
     const body = Box(
-      { flexGrow: 1, flexDirection: wide ? "row" : "column", gap: 1 },
+      { height: layout.bodyHeight, minHeight: 0, overflow: "hidden", flexDirection: wide ? "row" : "column", gap: 1 },
       list,
-      this.renderPreview(wide),
+      ...(layout.showPreview ? [this.renderPreview(wide)] : []),
     )
     const selected = this.selectedChats().length
+    const hiddenEmpty = this.hiddenEmptyCount()
     const summary = selected
       ? `${selected} selected · ${formatNumber(this.selectedTotal())} messages`
-      : `${visible.length} chats · ${this.#analyzed}/${this.#chats.length} analyzed`
+      : `${visible.length} chats shown · ${this.#analyzed}/${this.#chats.length} analyzed${hiddenEmpty ? ` · ${hiddenEmpty} empty hidden` : ""}`
+    const controls = this.renderer.width >= 150
+      ? "↑↓ move  PgUp/PgDn page  Space select  / search  D delete  R refresh  ? logs  Q quit"
+      : "↑↓ move  PgUp/PgDn page  Space select  / search  D delete  Q quit"
     return Box(
       { flexGrow: 1, flexDirection: "column" },
       body,
-      Box(
-        { height: 2, paddingX: 1, flexDirection: "row", justifyContent: "space-between" },
-        Text({ content: summary, fg: selected ? colors.accent : colors.muted }),
-        Text({ content: "↑↓ navigate  Space select  / search  D delete  R refresh  ? logs  Q quit", fg: colors.muted }),
-      ),
-      Text({ content: this.#status, fg: colors.muted }),
+      ...(this.renderer.width >= 150
+        ? [
+            Box(
+              { height: 1, flexShrink: 0, paddingX: 1, flexDirection: "row", justifyContent: "space-between" },
+              Text({ content: truncate(summary, Math.floor(this.renderer.width * 0.42)), fg: selected ? colors.accent : colors.muted }),
+              Text({ content: controls, fg: colors.muted }),
+            ),
+          ]
+        : [
+            Text({ content: truncate(summary, this.renderer.width - 4), fg: selected ? colors.accent : colors.muted, height: 1, flexShrink: 0 }),
+            Text({ content: truncate(controls, this.renderer.width - 4), fg: colors.muted, height: 1, flexShrink: 0 }),
+          ]),
       ...(this.#error ? [Text({ content: this.#error, fg: colors.danger })] : []),
     )
   }
@@ -676,6 +744,7 @@ export class WipegramApp {
         titleColor: colors.text,
         padding: 1,
         flexDirection: "column",
+        overflow: "hidden",
       },
       ...(this.#previewLoading
         ? [Text({ content: "Loading recent context...", fg: colors.muted })]
