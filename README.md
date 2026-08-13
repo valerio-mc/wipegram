@@ -19,7 +19,7 @@ Destructive actions always require a separate confirmation step.
 
 - Polished, keyboard-driven [OpenTUI](https://opentui.com/) interface
 - Telegram-side own-message counts with bounded concurrency
-- Lightweight, in-memory recent-message previews
+- In-memory message previews with 15-message, on-demand history pages
 - Local chat search and explicit multi-chat selection
 - Batched deletion for all participants where Telegram permits it
 - Sanitized diagnostics held only in memory for live troubleshooting
@@ -77,7 +77,8 @@ a new in-memory Telegram session, so Telegram authentication is required again a
 | --- | --- |
 | `↑` / `↓`, `k` / `j` | Navigate chats |
 | `Space` | Toggle chat selection |
-| `Enter` | Refresh the highlighted preview or confirm a dialog |
+| `Enter` | Focus the highlighted chat preview or confirm a dialog |
+| `↑` / `↓` in preview | Browse context; load 15 older messages at the top |
 | `/` | Search titles and usernames |
 | `D` | Review selected messages for deletion |
 | `R` | Reload dialogs and statistics |
