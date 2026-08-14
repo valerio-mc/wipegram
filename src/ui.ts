@@ -836,8 +836,8 @@ export class WipegramApp {
       ...fields,
       Text({
         content: spacious
-          ? "Tab / ↑↓ move   Enter continue   ? diagnostics"
-          : "Tab/↑↓ move  Enter continue  ? logs",
+          ? "Tab / ↑↓ move · ↵ continue · ? diagnostics"
+          : "Tab/↑↓ move · ↵ continue · ? logs",
         fg: colors.muted,
       }),
     ]
@@ -859,7 +859,7 @@ export class WipegramApp {
               Text({ content: `${shown}▌`, fg: colors.text }),
             ),
             ...(this.#error ? [Text({ content: this.#error, fg: colors.danger, marginTop: 1 })] : []),
-            Text({ content: "Paste works   Enter submit", fg: colors.muted, marginTop: 1 }),
+            Text({ content: "Paste works · ↵ submit", fg: colors.muted, marginTop: 1 }),
           ]
         : [Text({ content: "Waiting for Telegram...", fg: colors.accent, marginTop: 1 })]),
       ...(!prompt && this.#error ? [Text({ content: this.#error, fg: colors.danger, marginTop: 1 })] : []),
@@ -948,15 +948,15 @@ export class WipegramApp {
     )
     const controls = this.#previewFocused
       ? wide
-        ? "Preview  ↑↓ scroll  PgUp/PgDn page  Esc/↵ return  Q/Ctrl+C quit"
-        : "Preview  ↑↓ scroll  Esc/↵ return  Q/Ctrl+C quit"
+        ? "Preview · ↑↓ scroll · PgUp/PgDn page · Esc/↵ return · Q/Ctrl+C quit"
+        : "Preview · ↑↓ scroll · Esc/↵ return · Q/Ctrl+C quit"
       : this.renderer.width >= 150
-        ? "↑↓ move  PgUp/PgDn page  ↵ preview  Space select  / search  D delete  Ctrl+R refresh  ? logs  Q/Ctrl+C quit"
+        ? "↑↓ move · PgUp/PgDn page · ↵ preview · Space select · / search · D delete · Ctrl+R refresh · ? logs · Q/Ctrl+C quit"
         : wide
-          ? "↑↓ move  ↵ preview  Space select  / search  D delete  Ctrl+R refresh  Q/Ctrl+C quit"
+          ? "↑↓ move · ↵ preview · Space select · / search · D delete · Ctrl+R refresh · Q/Ctrl+C quit"
           : layout.showPreview
-            ? "↑↓ move  ↵ preview  Space select  Ctrl+R  Q/Ctrl+C quit"
-            : "↑↓ move  Space select  Ctrl+R refresh  Q/Ctrl+C quit"
+            ? "↑↓ move · ↵ preview · Space select · Ctrl+R · Q/Ctrl+C"
+            : "↑↓ move · Space select · Ctrl+R · Q/Ctrl+C"
     return Box(
       { flexGrow: 1, flexDirection: "column" },
       body,
@@ -1046,7 +1046,7 @@ export class WipegramApp {
       ),
       ...(chats.length > 10 ? [Text({ content: `and ${chats.length - 10} more chats`, fg: colors.muted })] : []),
       Text({ content: `Total  ${formatNumber(this.selectedTotal())}`, fg: colors.danger, attributes: TextAttributes.BOLD }),
-      Text({ content: "Enter delete permanently   Esc cancel", fg: colors.muted }),
+      Text({ content: "↵ delete permanently · Esc cancel", fg: colors.muted }),
     )
   }
 
@@ -1080,7 +1080,7 @@ export class WipegramApp {
             .slice(0, 3)
             .map((message) => Text({ content: message, fg: colors.danger }))
         : []),
-      Text({ content: "Enter refresh chats   ? diagnostics   Q quit", fg: colors.muted }),
+      Text({ content: "↵ refresh chats · ? diagnostics · Q quit", fg: colors.muted }),
     )
   }
 
@@ -1106,7 +1106,7 @@ export class WipegramApp {
           fg: entry.level === "error" ? colors.danger : entry.level === "warn" ? colors.accent : colors.text,
         }),
       ),
-      Text({ content: "Esc / Enter return", fg: colors.muted, marginTop: 1 }),
+      Text({ content: "Esc / ↵ return", fg: colors.muted, marginTop: 1 }),
     )
   }
 
