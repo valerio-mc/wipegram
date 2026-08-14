@@ -33,6 +33,7 @@ export interface ChatSummary {
   readonly username: string | null
   readonly type: "user" | "group" | "supergroup" | "channel" | "community"
   readonly archived: boolean
+  readonly deletionScope: "history" | "own"
 }
 
 export interface MessagePreview {
@@ -60,6 +61,7 @@ export interface DeleteProgress {
   readonly chatTitle: string
   readonly deleted: number
   readonly failed: number
+  readonly uncertain: number
   readonly processed: number
   readonly expected: number
 }
@@ -67,6 +69,7 @@ export interface DeleteProgress {
 export interface DeleteResult {
   readonly deleted: number
   readonly failed: number
+  readonly uncertain: number
   readonly cancelled: boolean
   readonly failures: ReadonlyMap<number, string>
 }
@@ -86,7 +89,10 @@ interface TelegramApi {
   getHistory(
     chatId: InputPeerLike,
     params: { limit: number; offset?: HistoryOffset },
-  ): Promise<ArrayLike<Message> & { next?: HistoryOffset }>
+  ): Promise<ArrayLike<Message> & { total: number; next?: HistoryOffset }>
+  resolvePeer(chatId: InputPeerLike): Promise<tl.TypeInputPeer>
+  call(request: tl.messages.RawDeleteHistoryRequest): Promise<tl.messages.RawAffectedHistory>
+  handleClientUpdate(updates: tl.TypeUpdates): void
   deleteMessagesById(
     chatId: InputPeerLike,
     ids: number[],
@@ -191,6 +197,7 @@ export class TelegramService {
                 ? "supergroup"
                 : peer.chatType,
           archived: dialog.isArchived,
+          deletionScope: peer.type === "user" && peer.id !== this.selfId ? "history" : "own",
         })
       }
       this.diagnostics.record({
@@ -207,7 +214,7 @@ export class TelegramService {
     }
   }
 
-  async countOwnMessages(
+  async countCleanupMessages(
     chats: readonly ChatSummary[],
     onProgress: (progress: CountProgress) => void,
     signal?: AbortSignal,
@@ -221,11 +228,14 @@ export class TelegramService {
         if (!chat) return
         const startedAt = performance.now()
         try {
-          const messages = await this.client.searchMessages({
-            chatId: chat.peer,
-            fromUser: "self",
-            limit: 1,
-          })
+          const messages =
+            chat.deletionScope === "history"
+              ? await this.client.getHistory(chat.peer, { limit: 1 })
+              : await this.client.searchMessages({
+                  chatId: chat.peer,
+                  fromUser: "self",
+                  limit: 1,
+                })
           analyzed += 1
           this.diagnostics.record({
             level: "info",
@@ -291,29 +301,41 @@ export class TelegramService {
     }
   }
 
-  async deleteOwnMessages(
+  async deleteSelectedMessages(
     chats: readonly (ChatSummary & { count: number })[],
     onProgress: (progress: DeleteProgress) => void,
     signal: AbortSignal,
   ): Promise<DeleteResult> {
     let deleted = 0
     let failed = 0
+    let uncertain = 0
     const failures = new Map<number, string>()
     const expected = chats.reduce((sum, item) => sum + item.count, 0)
 
     for (const chat of chats) {
       if (signal.aborted) break
-      let batch: number[] = []
-      let processedInChat = 0
       const reportProgress = (): void => {
         onProgress({
           chatTitle: chat.title,
           deleted,
           failed,
-          processed: deleted + failed,
+          uncertain,
+          processed: deleted + failed + uncertain,
           expected,
         })
       }
+      if (chat.deletionScope === "history") {
+        const result = await this.deletePrivateHistory(chat, signal)
+        deleted += result.deleted
+        failed += result.failed
+        uncertain += result.uncertain
+        if (result.error) failures.set(chat.id, result.error)
+        if (result.deleted || result.failed || result.uncertain) reportProgress()
+        continue
+      }
+
+      let batch: number[] = []
+      let processedInChat = 0
       try {
         for await (const message of this.client.iterSearchMessages({
           chatId: chat.peer,
@@ -350,7 +372,7 @@ export class TelegramService {
       }
     }
 
-    return { deleted, failed, cancelled: signal.aborted, failures }
+    return { deleted, failed, uncertain, cancelled: signal.aborted, failures }
   }
 
   async disconnect(): Promise<void> {
@@ -382,6 +404,65 @@ export class TelegramService {
     } catch (error) {
       this.recordFailure("messages.delete", startedAt, error, ids.length)
       return { deleted: 0, failed: ids.length, error: userFacingError(error).message }
+    }
+  }
+
+  private async deletePrivateHistory(
+    chat: ChatSummary & { count: number },
+    signal: AbortSignal,
+  ): Promise<{ deleted: number; failed: number; uncertain: number; error?: string }> {
+    const startedAt = performance.now()
+    let madeProgress = false
+    try {
+      if (signal.aborted) return { deleted: 0, failed: 0, uncertain: 0 }
+      const peer = await this.client.resolvePeer(chat.peer)
+      let previousOffset: number | undefined
+      while (!signal.aborted) {
+        const affected = await this.client.call({
+          _: "messages.deleteHistory",
+          revoke: true,
+          peer,
+          maxId: 0,
+        })
+        madeProgress = true
+        this.client.handleClientUpdate({
+          _: "updates",
+          seq: 0,
+          date: 0,
+          chats: [],
+          users: [],
+          updates: [
+            {
+              _: "mtcute.dummyUpdate",
+              channelId: 0,
+              pts: affected.pts,
+              ptsCount: affected.ptsCount,
+            },
+          ],
+        })
+        if (affected.offset === 0) break
+        if (previousOffset !== undefined && affected.offset >= previousOffset) {
+          throw new Error("Telegram did not advance private history deletion")
+        }
+        previousOffset = affected.offset
+      }
+      if (signal.aborted) return { deleted: 0, failed: 0, uncertain: madeProgress ? chat.count : 0 }
+      this.diagnostics.record({
+        level: "info",
+        operation: "history.delete",
+        outcome: "success",
+        durationMs: elapsed(startedAt),
+        count: chat.count,
+      })
+      return { deleted: chat.count, failed: 0, uncertain: 0 }
+    } catch (error) {
+      this.recordFailure("history.delete", startedAt, error, chat.count)
+      return {
+        deleted: 0,
+        failed: madeProgress ? 0 : chat.count,
+        uncertain: madeProgress ? chat.count : 0,
+        error: userFacingError(error).message,
+      }
     }
   }
 

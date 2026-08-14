@@ -432,7 +432,7 @@ export class WipegramApp {
       this.#cursor = Math.min(this.#cursor, Math.max(this.#chats.length - 1, 0))
       this.render()
       void this.loadPreview()
-      await this.#service.countOwnMessages(
+      await this.#service.countCleanupMessages(
         this.#chats,
         (progress) => {
           if (generation !== this.#refreshGeneration) return
@@ -597,7 +597,7 @@ export class WipegramApp {
     this.#deleteProgress = null
     this.#screen = { kind: "deleting" }
     this.render()
-    const result = await this.#service.deleteOwnMessages(
+    const result = await this.#service.deleteSelectedMessages(
       chats,
       (progress) => {
         this.#deleteProgress = progress
@@ -898,10 +898,11 @@ export class WipegramApp {
       const index = start + offset
       const active = index === this.#cursor
       const count = chat.count === undefined ? "…" : chat.count === null ? "!" : formatNumber(chat.count)
+      const cleanupCount = `${chat.deletionScope === "history" ? "all" : "own"} ${count}`
       const selected = this.#selected.has(chat.id) ? "◆" : " "
       const width = wide ? Math.floor((this.renderer.width - 8) * 0.54) : this.renderer.width - 8
       const metadata = `${chat.type}${chat.archived ? " · archived" : ""}`
-      const titleWidth = Math.max(12, width - count.length - 6)
+      const titleWidth = Math.max(12, width - cleanupCount.length - 6)
       return Box(
         {
           height: 2,
@@ -914,7 +915,7 @@ export class WipegramApp {
           content: `${active ? "›" : " "} ${selected} ${truncate(chat.title, titleWidth)}`,
           fg: active ? colors.text : colors.muted,
         }),
-        Text({ content: `${metadata}  ${count}`, fg: chat.countError ? colors.danger : colors.accent }),
+        Text({ content: `${metadata}  ${cleanupCount}`, fg: chat.countError ? colors.danger : colors.accent }),
       )
     })
     const list = Box(
@@ -1032,20 +1033,27 @@ export class WipegramApp {
   private renderConfirmation() {
     const chats = this.selectedChats()
     return this.centeredPanel(
-      "Delete your messages?",
+      "Delete selected history?",
       Text({
-        content: "Telegram will be asked to revoke these messages for everyone where permitted.",
+        content: "One-to-one chats: delete the full conversation for both people.",
+        fg: colors.muted,
+      }),
+      Text({
+        content: "Groups and channels: delete only messages you sent.",
         fg: colors.muted,
       }),
       ...chats.slice(0, 10).map((chat) =>
         Box(
           { flexDirection: "row", justifyContent: "space-between" },
           Text({ content: truncate(chat.title, 38), fg: colors.text }),
-          Text({ content: formatNumber(chat.count ?? 0), fg: colors.accent }),
+          Text({
+            content: `${chat.deletionScope === "history" ? "all" : "own"} · ${formatNumber(chat.count ?? 0)}`,
+            fg: colors.accent,
+          }),
         ),
       ),
       ...(chats.length > 10 ? [Text({ content: `and ${chats.length - 10} more chats`, fg: colors.muted })] : []),
-      Text({ content: `Total  ${formatNumber(this.selectedTotal())}`, fg: colors.danger, attributes: TextAttributes.BOLD }),
+      Text({ content: `Messages affected  ${formatNumber(this.selectedTotal())}`, fg: colors.danger, attributes: TextAttributes.BOLD }),
       Text({ content: "↵ delete permanently · Esc cancel", fg: colors.muted }),
     )
   }
@@ -1056,14 +1064,15 @@ export class WipegramApp {
     const barWidth = 36
     const filled = Math.min(barWidth, Math.round(ratio * barWidth))
     return this.centeredPanel(
-      "Deleting your messages",
+      "Deleting selected history",
       Text({ content: progress?.chatTitle ?? "Preparing first batch...", fg: colors.text }),
       Text({ content: `${"█".repeat(filled)}${"░".repeat(barWidth - filled)}`, fg: colors.accent }),
       Text({
         content: `${formatNumber(progress?.processed ?? 0)} / ${formatNumber(progress?.expected ?? this.selectedTotal())}`,
         fg: colors.muted,
       }),
-      Text({ content: `Deleted  ${formatNumber(progress?.deleted ?? 0)}`, fg: colors.own }),
+      Text({ content: `Affected  ${formatNumber(progress?.deleted ?? 0)}`, fg: colors.own }),
+      Text({ content: `Unconfirmed  ${formatNumber(progress?.uncertain ?? 0)}`, fg: progress?.uncertain ? colors.accent : colors.muted }),
       Text({ content: `Failed   ${formatNumber(progress?.failed ?? 0)}`, fg: progress?.failed ? colors.danger : colors.muted }),
       Text({ content: "Esc / Ctrl+C stop after current request", fg: colors.muted }),
     )
@@ -1072,7 +1081,8 @@ export class WipegramApp {
   private renderResult(result: DeleteResult) {
     return this.centeredPanel(
       result.cancelled ? "Cleanup stopped" : "Cleanup complete",
-      Text({ content: `Deleted  ${formatNumber(result.deleted)}`, fg: colors.own }),
+      Text({ content: `Affected  ${formatNumber(result.deleted)}`, fg: colors.own }),
+      Text({ content: `Unconfirmed  ${formatNumber(result.uncertain)}`, fg: result.uncertain ? colors.accent : colors.muted }),
       Text({ content: `Failed   ${formatNumber(result.failed)}`, fg: result.failed ? colors.danger : colors.muted }),
       Text({ content: `Chats with failures  ${result.failures.size}`, fg: colors.muted }),
       ...(result.failures.size > 0

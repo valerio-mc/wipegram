@@ -3,26 +3,26 @@
 </p>
 
 <p align="center">
-  <strong>Inspect your Telegram footprint. Remove your messages for everyone. Leave no session behind.</strong>
+  <strong>Wipe private chats. Remove your group messages. Leave no session behind.</strong>
 </p>
 
 <p align="center">
   A fast terminal interface with process-only authentication and no persistent Telegram session.
 </p>
 
-wipegram authenticates as you, lists your Telegram dialogs, progressively counts the messages you
-authored, previews recent context, and lets you select chats for batched cleanup. It explicitly asks
-Telegram to revoke those messages for every participant, not merely hide them from your account.
-Destructive actions always require a separate confirmation step.
+wipegram authenticates as you, lists your Telegram dialogs, previews recent context, and lets you
+select chats for cleanup. **In private one-to-one chats it wipes the complete conversation for both
+participants, including received messages. In groups, channels, and communities it deletes only
+messages you sent.** Destructive actions always require a separate confirmation step.
 
 ## Features
 
 - Polished, keyboard-driven [OpenTUI](https://opentui.com/) interface
 - Responsive onboarding with native-image branding across supported terminal sizes
-- Telegram-side own-message counts with bounded concurrency
+- Telegram-side cleanup counts with bounded concurrency
 - In-memory message previews with 15-message, on-demand history pages
 - Local chat search and explicit multi-chat selection
-- Batched deletion for all participants where Telegram permits it
+- Full private-chat revocation and batched own-message deletion in groups
 - Sanitized diagnostics held only in memory for live troubleshooting
 - Fully ephemeral authentication powered by [mtcute](https://mtcute.dev/), with no session files
 
@@ -84,7 +84,7 @@ normally at any time; compact layouts scale the branding to preserve the workflo
 | `↵ Enter` | Focus the highlighted chat preview or confirm a dialog |
 | `↑` / `↓` in preview | Browse context; load 15 older messages at the top |
 | `/` | Search titles and usernames |
-| `D` | Review selected messages for deletion |
+| `D` | Review the deletion scope for selected chats |
 | `Ctrl+R` | Reload dialogs and statistics |
 | `Esc` | Cancel or go back |
 | `?` | View sanitized in-memory diagnostics |
@@ -92,10 +92,13 @@ normally at any time; compact layouts scale the branding to preserve the workflo
 
 ## Safety
 
-Deletion is destructive. **wipegram requests deletion for everyone in the conversation, not deletion
-from your local history only.** Telegram ultimately decides whether each historical message can be
-revoked for all participants. Failed batches are reported rather than counted as successful.
-Cancelling stops new batches after any request already in flight finishes.
+Deletion is destructive. **For private one-to-one chats, wipegram requests deletion of the entire
+conversation for both participants, including messages the other person sent. For groups, channels,
+and communities, wipegram requests deletion only of messages you sent.** Telegram ultimately decides
+what can be revoked. Failed batches or history requests are reported rather than counted as
+successful. Private-chat counts are pre-deletion estimates. Cancelling stops new requests after any
+request already in flight finishes. If a multi-request private cleanup is interrupted, wipegram
+reports its estimated scope as unconfirmed because Telegram does not return a per-request count.
 
 ## Tech
 
