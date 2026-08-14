@@ -54,7 +54,7 @@ launch. Nothing needs to be added to a configuration or `.env` file.
    two-step verification enabled, wipegram will also request that existing Telegram password.
 
 The `api_hash`, login code, and two-step verification password are different values. wipegram masks
-sensitive fields and never asks you to pass any of them as command-line arguments.
+the API hash and two-step verification password and never accepts secrets as command-line arguments.
 
 ## Requirements
 

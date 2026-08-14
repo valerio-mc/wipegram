@@ -23,8 +23,4 @@ export class Diagnostics {
   snapshot(): readonly DiagnosticEntry[] {
     return this.#entries.slice()
   }
-
-  clear(): void {
-    this.#entries.length = 0
-  }
 }

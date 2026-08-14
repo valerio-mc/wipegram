@@ -6,7 +6,6 @@ import {
   type Dialog,
   type InputPeerLike,
   type Message,
-  type User,
 } from "@mtcute/bun"
 import type { Diagnostics } from "./diagnostics"
 
@@ -25,7 +24,6 @@ export interface AuthenticationPrompts {
   code(): Promise<string>
   password(): Promise<string>
   invalid(kind: "code" | "password"): void
-  codeSent(): void
 }
 
 export interface ChatSummary {
@@ -35,8 +33,6 @@ export interface ChatSummary {
   readonly username: string | null
   readonly type: "user" | "group" | "supergroup" | "channel" | "community"
   readonly archived: boolean
-  readonly muted: boolean
-  readonly lastActivity: Date | null
 }
 
 export interface MessagePreview {
@@ -61,7 +57,6 @@ export interface CountProgress {
 }
 
 export interface DeleteProgress {
-  readonly chatId: number
   readonly chatTitle: string
   readonly deleted: number
   readonly failed: number
@@ -115,7 +110,7 @@ export class TelegramService {
     prompts: AuthenticationPrompts,
     diagnostics: Diagnostics,
     abortSignal?: AbortSignal,
-  ): Promise<{ service: TelegramService; user: User }> {
+  ): Promise<TelegramService> {
     const startedAt = performance.now()
     const client = new TelegramClient({
       apiId: credentials.apiId,
@@ -147,7 +142,7 @@ export class TelegramService {
         phone: credentials.phone,
         code: prompts.code,
         password: prompts.password,
-        codeSentCallback: prompts.codeSent,
+        codeSentCallback: () => {},
         invalidCodeCallback: prompts.invalid,
         ...(abortSignal ? { abortSignal } : {}),
       })
@@ -160,7 +155,7 @@ export class TelegramService {
         outcome: "success",
         durationMs: elapsed(startedAt),
       })
-      return { service: new TelegramService(client, diagnostics, user.id), user }
+      return new TelegramService(client, diagnostics, user.id)
     } catch (error) {
       diagnostics.record({
         level: "error",
@@ -196,8 +191,6 @@ export class TelegramService {
                 ? "supergroup"
                 : peer.chatType,
           archived: dialog.isArchived,
-          muted: dialog.isMuted === true,
-          lastActivity: dialog.lastMessage?.date ?? null,
         })
       }
       this.diagnostics.record({
@@ -312,6 +305,15 @@ export class TelegramService {
       if (signal.aborted) break
       let batch: number[] = []
       let processedInChat = 0
+      const reportProgress = (): void => {
+        onProgress({
+          chatTitle: chat.title,
+          deleted,
+          failed,
+          processed: deleted + failed,
+          expected,
+        })
+      }
       try {
         for await (const message of this.client.iterSearchMessages({
           chatId: chat.peer,
@@ -327,14 +329,7 @@ export class TelegramService {
           processedInChat += batch.length
           if (result.error) failures.set(chat.id, result.error)
           batch = []
-          onProgress({
-            chatId: chat.id,
-            chatTitle: chat.title,
-            deleted,
-            failed,
-            processed: deleted + failed,
-            expected,
-          })
+          reportProgress()
           if (signal.aborted) break
         }
         if (!signal.aborted && batch.length > 0) {
@@ -343,14 +338,7 @@ export class TelegramService {
           failed += result.failed
           processedInChat += batch.length
           if (result.error) failures.set(chat.id, result.error)
-          onProgress({
-            chatId: chat.id,
-            chatTitle: chat.title,
-            deleted,
-            failed,
-            processed: deleted + failed,
-            expected,
-          })
+          reportProgress()
         }
       } catch (error) {
         const remaining = Math.max(0, chat.count - processedInChat)
@@ -358,14 +346,7 @@ export class TelegramService {
         const message = userFacingError(error).message
         failures.set(chat.id, message)
         this.recordFailure("messages.iterate", performance.now(), error, remaining)
-        onProgress({
-          chatId: chat.id,
-          chatTitle: chat.title,
-          deleted,
-          failed,
-          processed: deleted + failed,
-          expected,
-        })
+        reportProgress()
       }
     }
 

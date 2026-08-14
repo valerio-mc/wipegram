@@ -58,10 +58,7 @@ type Screen =
   | { kind: "result"; result: DeleteResult }
   | { kind: "diagnostics"; previous: "credentials" | "chats" }
 
-interface PendingPrompt {
-  kind: "code" | "password"
-  resolve(value: string): void
-}
+type PendingPrompt = (value: string) => void
 
 interface ChatLayout {
   wide: boolean
@@ -69,7 +66,6 @@ interface ChatLayout {
   bodyHeight: number
   listHeight: number
   pageSize: number
-  footerHeight: number
 }
 
 const CHAT_ROW_HEIGHT = 2
@@ -89,7 +85,7 @@ export function calculateChatLayout(width: number, height: number, hasError: boo
     wide || !showPreview ? availableHeight : availableHeight - STACKED_PREVIEW_HEIGHT - 1,
   )
   const pageSize = Math.max(1, Math.floor((listHeight - LIST_CHROME_HEIGHT) / CHAT_ROW_HEIGHT))
-  return { wide, showPreview, bodyHeight: availableHeight, listHeight, pageSize, footerHeight }
+  return { wide, showPreview, bodyHeight: availableHeight, listHeight, pageSize }
 }
 
 export class WipegramApp {
@@ -101,7 +97,6 @@ export class WipegramApp {
   ]
   readonly #previewCache = new Map<number, PreviewState>()
   readonly #selected = new Set<number>()
-  #appShell!: BoxRenderable
   #sizeStage!: BoxRenderable
   #onboardingStage!: BoxRenderable
   #onboardingPanel!: BoxRenderable
@@ -215,11 +210,11 @@ export class WipegramApp {
       this.#promptValue = this.#promptValue.slice(0, -1)
     } else if (key.name === "return" && this.#promptValue.length > 0) {
       const value = this.#promptValue
-      const prompt = this.#pendingPrompt
+      const resolve = this.#pendingPrompt
       this.#promptValue = ""
       this.#pendingPrompt = null
       this.#screen = { kind: "authenticating", message: "Verifying with Telegram..." }
-      prompt.resolve(value)
+      resolve(value)
     } else if (isPrintable(key)) {
       this.#promptValue += key.sequence
     }
@@ -362,7 +357,7 @@ export class WipegramApp {
     for (const field of this.#fields) field.value = ""
     this.render()
     try {
-      const authenticated = await TelegramService.authenticate(
+      this.#service = await TelegramService.authenticate(
         { apiId, apiHash, phone },
         {
           code: () => this.requestPrompt("code"),
@@ -370,12 +365,10 @@ export class WipegramApp {
           invalid: (kind) => {
             this.#error = kind === "code" ? "Incorrect login code" : "Incorrect password"
           },
-          codeSent: () => {},
         },
         this.#diagnostics,
         this.#authAbort.signal,
       )
-      this.#service = authenticated.service
       this.#screen = { kind: "chats" }
       await this.refresh()
     } catch (error) {
@@ -397,7 +390,7 @@ export class WipegramApp {
     }
     this.render()
     return new Promise((resolve) => {
-      this.#pendingPrompt = { kind, resolve }
+      this.#pendingPrompt = resolve
     })
   }
 
@@ -465,12 +458,12 @@ export class WipegramApp {
     }
   }
 
-  private async loadPreview(force = false): Promise<void> {
+  private async loadPreview(): Promise<void> {
     const chat = this.visibleChats()[this.#cursor]
     if (!chat || !this.#service) return
     const token = ++this.#previewToken
     const cached = this.#previewCache.get(chat.id)
-    if (cached && !force) {
+    if (cached) {
       this.applyPreviewState(cached)
       this.#previewError = ""
       this.#previewLoading = false
@@ -602,7 +595,6 @@ export class WipegramApp {
     )
     this.#selected.clear()
     this.#screen = { kind: "result", result }
-    this.render()
   }
 
   private visibleChats(): ChatRow[] {
@@ -666,7 +658,7 @@ export class WipegramApp {
   }
 
   private initializeShell(): void {
-    this.#appShell = new BoxRenderable(this.renderer, {
+    const appShell = new BoxRenderable(this.renderer, {
       id: "app-shell",
       width: "100%",
       height: "100%",
@@ -768,10 +760,10 @@ export class WipegramApp {
       height: "100%",
       flexDirection: "column",
     })
-    this.#appShell.add(this.#sizeStage)
-    this.#appShell.add(this.#onboardingStage)
-    this.#appShell.add(this.#operationalStage)
-    this.renderer.root.add(this.#appShell)
+    appShell.add(this.#sizeStage)
+    appShell.add(this.#onboardingStage)
+    appShell.add(this.#operationalStage)
+    this.renderer.root.add(appShell)
   }
 
   private renderOnboarding(): void {
@@ -780,7 +772,6 @@ export class WipegramApp {
     this.#onboardingPanel.width = panelWidth
     this.#onboardingPanel.height = spacious ? 26 : 16
     this.#onboardingPanel.flexDirection = "row"
-    this.#logoRail.visible = true
     this.#logoRail.width = spacious ? 34 : 12
     this.#logo.width = spacious ? 28 : 10
     this.#logo.height = spacious ? 14 : 5
@@ -1117,7 +1108,7 @@ export class WipegramApp {
     if (this.#closing) return
     this.#closing = true
     this.#refreshGeneration += 1
-    this.#pendingPrompt?.resolve("")
+    this.#pendingPrompt?.("")
     this.#pendingPrompt = null
     this.#authAbort?.abort()
     this.#countAbort?.abort()
