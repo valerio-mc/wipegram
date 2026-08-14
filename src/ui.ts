@@ -702,7 +702,7 @@ export class WipegramApp {
       height: "100%",
       alignItems: "center",
       justifyContent: "center",
-      backgroundColor: colors.background,
+      backgroundColor: colors.panel,
     })
     this.#logoFallback = new BoxRenderable(this.renderer, {
       id: "logo-fallback",
@@ -776,11 +776,15 @@ export class WipegramApp {
 
   private renderOnboarding(): void {
     const spacious = this.renderer.width >= 104 && this.renderer.height >= 30
-    this.#onboardingPanel.width = spacious ? 100 : Math.min(64, this.renderer.width - 4)
-    this.#onboardingPanel.height = spacious ? 26 : Math.min(16, this.renderer.height - 2)
-    this.#onboardingPanel.flexDirection = spacious ? "row" : "column"
-    this.#logoRail.visible = spacious
-    this.#formHost.width = spacious ? 64 : "100%"
+    const panelWidth = spacious ? 100 : Math.min(88, this.renderer.width - 4)
+    this.#onboardingPanel.width = panelWidth
+    this.#onboardingPanel.height = spacious ? 26 : 16
+    this.#onboardingPanel.flexDirection = "row"
+    this.#logoRail.visible = true
+    this.#logoRail.width = spacious ? 34 : 12
+    this.#logo.width = spacious ? 28 : 10
+    this.#logo.height = spacious ? 14 : 5
+    this.#formHost.width = spacious ? 64 : panelWidth - 14
     this.#formHost.padding = spacious ? 2 : 1
     this.clearHost(this.#formHost)
     const content = this.#screen.kind === "credentials" ? this.renderCredentialFields(spacious) : this.renderAuthenticationPrompt()
@@ -816,9 +820,22 @@ export class WipegramApp {
     })
     return [
       Text({ content: "Connect your Telegram account", fg: colors.text, attributes: TextAttributes.BOLD }),
-      Text({ content: this.#error || "Nothing entered here is written to disk.", fg: this.#error ? colors.danger : colors.muted, marginBottom: spacious ? 2 : 0 }),
+      Text({
+        content:
+          this.#error ||
+          (spacious
+            ? "Credentials are memory-only; discarded on exit."
+            : "Memory-only; discarded on exit."),
+        fg: this.#error ? colors.danger : colors.muted,
+        marginBottom: spacious ? 2 : 0,
+      }),
       ...fields,
-      Text({ content: "Tab / ↑↓ move   Enter continue   ? diagnostics", fg: colors.muted }),
+      Text({
+        content: spacious
+          ? "Tab / ↑↓ move   Enter continue   ? diagnostics"
+          : "Tab/↑↓ move  Enter continue  ? logs",
+        fg: colors.muted,
+      }),
     ]
   }
 

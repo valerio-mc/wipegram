@@ -18,7 +18,7 @@ Destructive actions always require a separate confirmation step.
 ## Features
 
 - Polished, keyboard-driven [OpenTUI](https://opentui.com/) interface
-- Responsive onboarding with native-image branding on spacious terminals
+- Responsive onboarding with native-image branding across supported terminal sizes
 - Telegram-side own-message counts with bounded concurrency
 - In-memory message previews with 15-message, on-demand history pages
 - Local chat search and explicit multi-chat selection
@@ -73,7 +73,7 @@ Enter credentials in the OpenTUI. Do not pass secrets as command-line arguments.
 a new in-memory Telegram session, so Telegram authentication is required again after exit.
 
 wipegram adapts to the terminal's current dimensions and never resizes the terminal window. Resize
-normally at any time; compact layouts omit decorative graphics to preserve the workflow.
+normally at any time; compact layouts scale the branding to preserve the workflow.
 
 ## Controls
 
