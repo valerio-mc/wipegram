@@ -76,8 +76,7 @@ const LOGO_SOURCE = new URL("../wipegram.png", import.meta.url)
 
 export function calculateChatLayout(width: number, height: number, hasError: boolean): ChatLayout {
   const wide = width >= 94
-  const compactFooter = width < 150
-  const footerHeight = (compactFooter ? 2 : 1) + (hasError ? 1 : 0)
+  const footerHeight = 2 + (hasError ? 1 : 0)
   const availableHeight = Math.max(1, height - 2 - footerHeight)
   const showPreview = wide || availableHeight >= 16
   const listHeight = Math.max(
@@ -129,6 +128,7 @@ export class WipegramApp {
   #authAbort: AbortController | null = null
   #deleteAbort: AbortController | null = null
   #deleteProgress: DeleteProgress | null = null
+  #refreshing = false
   #closing = false
   #refreshGeneration = 0
   readonly #signals: NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT"]
@@ -150,7 +150,11 @@ export class WipegramApp {
 
   private async onKey(key: KeyEvent): Promise<void> {
     if (key.eventType === "release") return
-    if (key.ctrl && key.name === "c") {
+    const textEntry =
+      this.#screen.kind === "credentials" ||
+      this.#screen.kind === "authenticating" ||
+      (this.#screen.kind === "chats" && this.#searching)
+    if ((key.ctrl && key.name === "c") || (key.name.toLowerCase() === "q" && !textEntry)) {
       if (this.#screen.kind === "deleting") {
         this.#deleteAbort?.abort()
         this.render()
@@ -222,6 +226,11 @@ export class WipegramApp {
   }
 
   private async handleChatsKey(key: KeyEvent): Promise<void> {
+    if (key.ctrl && key.name.toLowerCase() === "r") {
+      await this.refresh()
+      return
+    }
+
     if (this.#searching) {
       if (key.name === "escape") {
         this.#searching = false
@@ -284,13 +293,8 @@ export class WipegramApp {
       this.#searching = true
     } else if (key.name.toLowerCase() === "d" && this.selectedChats().length > 0) {
       this.#screen = { kind: "confirm" }
-    } else if (key.name.toLowerCase() === "r") {
-      await this.refresh()
     } else if (key.name === "?" || (key.shift && key.name === "/")) {
       this.#screen = { kind: "diagnostics", previous: "chats" }
-    } else if (key.name.toLowerCase() === "q") {
-      await this.close()
-      return
     }
     this.render()
   }
@@ -307,9 +311,6 @@ export class WipegramApp {
       await this.refresh()
     } else if (key.name === "?" || (key.shift && key.name === "/")) {
       this.#screen = { kind: "diagnostics", previous: "chats" }
-    } else if (key.name.toLowerCase() === "q") {
-      await this.close()
-      return
     }
     this.render()
   }
@@ -395,7 +396,18 @@ export class WipegramApp {
   }
 
   private async refresh(): Promise<void> {
+    if (this.#refreshing) return
+    this.#refreshing = true
+    try {
+      await this.loadChats()
+    } finally {
+      this.#refreshing = false
+    }
+  }
+
+  private async loadChats(): Promise<void> {
     if (!this.#service) return
+    this.#error = ""
     const generation = ++this.#refreshGeneration
     this.#countAbort?.abort()
     this.#countAbort = new AbortController()
@@ -633,6 +645,7 @@ export class WipegramApp {
   }
 
   private render(): void {
+    if (this.#closing) return
     const tooSmall = this.renderer.width < 60 || this.renderer.height < 18
     const onboarding = this.#screen.kind === "credentials" || this.#screen.kind === "authenticating"
     this.#sizeStage.visible = tooSmall
@@ -862,6 +875,20 @@ export class WipegramApp {
     if (!layout.showPreview) this.#previewFocused = false
     const { wide } = layout
     const visible = this.visibleChats()
+    const selected = this.selectedChats().length
+    const hiddenEmpty = this.hiddenEmptyCount()
+    const stats = selected
+      ? `${selected} selected · ${formatNumber(this.selectedTotal())} msgs`
+      : `${visible.length} shown · ${this.#analyzed}/${this.#chats.length} scanned${hiddenEmpty ? ` · ${hiddenEmpty} hidden` : ""}`
+    const listTitleWidth = wide
+      ? Math.floor((this.renderer.width - 3) * 0.55) - 4
+      : this.renderer.width - 6
+    const titleBase = `Chats · ${stats}`
+    const searchWidth = Math.max(6, Math.min(24, Math.floor(listTitleWidth * 0.4)))
+    const search = `/${truncateStart(this.#search, searchWidth - 2)}▌`
+    const listTitle = this.#searching
+      ? `${truncate(titleBase, Math.max(8, listTitleWidth - search.length - 3))} · ${search}`
+      : titleBase
     this.#cursor = Math.min(this.#cursor, Math.max(visible.length - 1, 0))
     const start = Math.max(
       0,
@@ -898,8 +925,8 @@ export class WipegramApp {
         overflow: "hidden",
         borderStyle: "rounded",
         borderColor: colors.border,
-        title: this.#searching ? ` Chats · /${this.#search}▌ ` : " Chats ",
-        titleColor: this.#searching ? colors.accent : colors.text,
+        title: ` ${truncate(listTitle, Math.max(10, listTitleWidth))} `,
+        titleColor: this.#searching || selected ? colors.accent : colors.text,
         padding: 1,
         flexDirection: "column",
         onMouseScroll: (event) => {
@@ -919,32 +946,31 @@ export class WipegramApp {
       list,
       ...(layout.showPreview ? [this.renderPreview(wide)] : []),
     )
-    const selected = this.selectedChats().length
-    const hiddenEmpty = this.hiddenEmptyCount()
-    const summary = selected
-      ? `${selected} selected · ${formatNumber(this.selectedTotal())} messages`
-      : `${visible.length} chats shown · ${this.#analyzed}/${this.#chats.length} analyzed${hiddenEmpty ? ` · ${hiddenEmpty} empty hidden` : ""}`
     const controls = this.#previewFocused
-      ? "Preview: ↑↓ scroll  PgUp/PgDn page  Esc/Enter return"
+      ? wide
+        ? "Preview  ↑↓ scroll  PgUp/PgDn page  Esc/↵ return  Q/Ctrl+C quit"
+        : "Preview  ↑↓ scroll  Esc/↵ return  Q/Ctrl+C quit"
       : this.renderer.width >= 150
-        ? "↑↓ move  PgUp/PgDn page  Enter preview  Space select  / search  D delete  R refresh  ? logs  Q quit"
-        : "↑↓ move  Enter preview  Space select  / search  D delete  Q quit"
+        ? "↑↓ move  PgUp/PgDn page  ↵ preview  Space select  / search  D delete  Ctrl+R refresh  ? logs  Q/Ctrl+C quit"
+        : wide
+          ? "↑↓ move  ↵ preview  Space select  / search  D delete  Ctrl+R refresh  Q/Ctrl+C quit"
+          : layout.showPreview
+            ? "↑↓ move  ↵ preview  Space select  Ctrl+R  Q/Ctrl+C quit"
+            : "↑↓ move  Space select  Ctrl+R refresh  Q/Ctrl+C quit"
     return Box(
       { flexGrow: 1, flexDirection: "column" },
       body,
-      ...(this.renderer.width >= 150
-        ? [
-            Box(
-              { height: 1, flexShrink: 0, paddingX: 1, flexDirection: "row", justifyContent: "space-between" },
-              Text({ content: truncate(summary, Math.floor(this.renderer.width * 0.42)), fg: selected ? colors.accent : colors.muted }),
-              Text({ content: controls, fg: colors.muted }),
-            ),
-          ]
-        : [
-            Text({ content: truncate(summary, this.renderer.width - 4), fg: selected ? colors.accent : colors.muted, height: 1, flexShrink: 0 }),
-            Text({ content: truncate(controls, this.renderer.width - 4), fg: colors.muted, height: 1, flexShrink: 0 }),
-          ]),
       ...(this.#error ? [Text({ content: this.#error, fg: colors.danger })] : []),
+      Box(
+        {
+          height: 2,
+          flexShrink: 0,
+          paddingTop: 1,
+          alignItems: "center",
+          justifyContent: "center",
+        },
+        Text({ content: truncate(controls, this.renderer.width - 4), fg: colors.muted }),
+      ),
     )
   }
 
@@ -1108,6 +1134,7 @@ export class WipegramApp {
     if (this.#closing) return
     this.#closing = true
     this.#refreshGeneration += 1
+    this.#previewToken += 1
     this.#pendingPrompt?.("")
     this.#pendingPrompt = null
     this.#authAbort?.abort()
@@ -1134,6 +1161,11 @@ function isPrintable(key: KeyEvent): boolean {
 function truncate(value: string, width: number): string {
   if (width <= 1) return ""
   return value.length <= width ? value : `${value.slice(0, width - 1)}…`
+}
+
+function truncateStart(value: string, width: number): string {
+  if (width <= 1) return ""
+  return value.length <= width ? value : `…${value.slice(1 - width)}`
 }
 
 function formatNumber(value: number): string {

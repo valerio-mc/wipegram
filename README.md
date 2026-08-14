@@ -81,14 +81,14 @@ normally at any time; compact layouts scale the branding to preserve the workflo
 | --- | --- |
 | `↑` / `↓`, `k` / `j` | Navigate chats |
 | `Space` | Toggle chat selection |
-| `Enter` | Focus the highlighted chat preview or confirm a dialog |
+| `↵ Enter` | Focus the highlighted chat preview or confirm a dialog |
 | `↑` / `↓` in preview | Browse context; load 15 older messages at the top |
 | `/` | Search titles and usernames |
 | `D` | Review selected messages for deletion |
-| `R` | Reload dialogs and statistics |
+| `Ctrl+R` | Reload dialogs and statistics |
 | `Esc` | Cancel or go back |
 | `?` | View sanitized in-memory diagnostics |
-| `Q` | Disconnect and quit |
+| `Ctrl+C` or `Q` | Quit; `Q` remains text in inputs, and deletion stops after the active request |
 
 ## Safety
 
