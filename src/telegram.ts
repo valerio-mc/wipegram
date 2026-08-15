@@ -23,6 +23,7 @@ export interface TelegramCredentials {
 export interface AuthenticationPrompts {
   code(): Promise<string>
   password(): Promise<string>
+  codeSent(message: string): void
   invalid(kind: "code" | "password"): void
 }
 
@@ -148,7 +149,14 @@ export class TelegramService {
         phone: credentials.phone,
         code: prompts.code,
         password: prompts.password,
-        codeSentCallback: () => {},
+        codeSentCallback: (code) => {
+          if (code.type === "email_required") {
+            throw new AuthenticationSetupError(
+              "Telegram requires email login setup. Complete it in an official Telegram app, then retry.",
+            )
+          }
+          prompts.codeSent(codeDeliveryMessage(code.type))
+        },
         invalidCodeCallback: prompts.invalid,
         ...(abortSignal ? { abortSignal } : {}),
       })
@@ -581,6 +589,31 @@ function isDeletableOwnMessage(message: Message): boolean {
   return !message.isService
 }
 
+class AuthenticationSetupError extends Error {}
+
+function codeDeliveryMessage(type: string): string {
+  switch (type) {
+    case "app":
+      return "Enter the code sent to another logged-in Telegram app"
+    case "sms":
+    case "sms_word":
+    case "sms_phrase":
+    case "firebase":
+      return "Enter the code sent by SMS"
+    case "call":
+      return "Enter the code provided by Telegram's phone call"
+    case "flash_call":
+    case "missed_call":
+      return "Enter the code from Telegram's phone call"
+    case "email":
+      return "Enter the code sent to your Telegram login email"
+    case "fragment":
+      return "Open Fragment to view and enter the Telegram login code"
+    default:
+      return "Enter the login code Telegram sent"
+  }
+}
+
 function errorCode(error: unknown): string {
   if (tl.RpcError.is(error)) return error.text
   if (error instanceof Error) return error.name
@@ -588,6 +621,7 @@ function errorCode(error: unknown): string {
 }
 
 export function userFacingError(error: unknown): Error {
+  if (error instanceof AuthenticationSetupError) return error
   if (tl.RpcError.is(error, "API_ID_INVALID")) return new Error("Invalid API credentials")
   if (tl.RpcError.is(error, "PHONE_CODE_INVALID")) return new Error("Incorrect login code")
   if (tl.RpcError.is(error, "PHONE_CODE_EXPIRED")) return new Error("Login code expired")

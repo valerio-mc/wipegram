@@ -109,6 +109,7 @@ export class WipegramApp {
   #service: TelegramService | null = null
   #activeField = 0
   #promptValue = ""
+  #codePromptMessage = "Enter the login code Telegram sent"
   #pendingPrompt: PendingPrompt | null = null
   #error = ""
   #chats: ChatRow[] = []
@@ -355,6 +356,7 @@ export class WipegramApp {
     }
 
     this.#error = ""
+    this.#codePromptMessage = "Enter the login code Telegram sent"
     this.#authAbort = new AbortController()
     this.#screen = { kind: "authenticating", message: "Connecting securely to Telegram..." }
     for (const field of this.#fields) field.value = ""
@@ -365,6 +367,9 @@ export class WipegramApp {
         {
           code: () => this.requestPrompt("code"),
           password: () => this.requestPrompt("password"),
+          codeSent: (message) => {
+            this.#codePromptMessage = message
+          },
           invalid: (kind) => {
             this.#error = kind === "code" ? "Incorrect login code" : "Incorrect password"
           },
@@ -389,7 +394,7 @@ export class WipegramApp {
     this.#screen = {
       kind: "authenticating",
       prompt: kind,
-      message: kind === "code" ? "Enter the code Telegram sent" : "Two-factor authentication",
+      message: kind === "code" ? this.#codePromptMessage : "Two-factor authentication",
     }
     this.render()
     return new Promise((resolve) => {
