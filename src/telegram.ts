@@ -100,6 +100,8 @@ const DELETE_BATCH_SIZE = 100
 const COUNT_CONCURRENCY = 4
 
 export class TelegramService {
+  readonly #deletedMessageIds = new Map<number, Set<number>>()
+
   private constructor(
     private readonly client: TelegramApi,
     private readonly diagnostics: Diagnostics,
@@ -228,14 +230,22 @@ export class TelegramService {
             count = (await this.client.getHistory(chat.peer, { limit: 1 })).total
           } else {
             count = 0
+            const deletedIds = this.#deletedMessageIds.get(chat.id)
+            const staleIds = deletedIds ? new Set<number>() : null
             for await (const message of this.client.iterSearchMessages({
               chatId: chat.peer,
               fromUser: "self",
               chunkSize: DELETE_BATCH_SIZE,
             })) {
               if (signal?.aborted) return
-              if (isDeletableOwnMessage(message)) count += 1
+              if (deletedIds?.has(message.id)) {
+                staleIds?.add(message.id)
+              } else if (isDeletableOwnMessage(message)) {
+                count += 1
+              }
             }
+            if (staleIds?.size) this.#deletedMessageIds.set(chat.id, staleIds)
+            else this.#deletedMessageIds.delete(chat.id)
           }
           analyzed += 1
           this.diagnostics.record({
@@ -341,6 +351,8 @@ export class TelegramService {
 
       let batch: number[] = []
       let processedInChat = 0
+      let deletedIds = this.#deletedMessageIds.get(chat.id)
+      if (!deletedIds) this.#deletedMessageIds.set(chat.id, (deletedIds = new Set()))
       try {
         for await (const message of this.client.iterSearchMessages({
           chatId: chat.peer,
@@ -348,7 +360,7 @@ export class TelegramService {
           chunkSize: DELETE_BATCH_SIZE,
         })) {
           if (signal.aborted) break
-          if (!isDeletableOwnMessage(message)) continue
+          if (!isDeletableOwnMessage(message) || deletedIds?.has(message.id)) continue
           batch.push(message.id)
           if (batch.length !== DELETE_BATCH_SIZE) continue
           const result = await this.deleteBatch(chat, batch)
@@ -399,6 +411,9 @@ export class TelegramService {
     const startedAt = performance.now()
     try {
       await this.client.deleteMessagesById(chat.peer, ids, { revoke: true })
+      let deletedIds = this.#deletedMessageIds.get(chat.id)
+      if (!deletedIds) this.#deletedMessageIds.set(chat.id, (deletedIds = new Set()))
+      for (const id of ids) deletedIds.add(id)
       this.diagnostics.record({
         level: "info",
         operation: "messages.delete",

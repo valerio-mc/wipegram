@@ -85,7 +85,7 @@ normally at any time; compact layouts scale the branding to preserve the workflo
 | `↑` / `↓` in preview | Browse context; load 15 older messages at the top |
 | `/` | Search titles and usernames |
 | `D` | Review the deletion scope for selected chats |
-| `Ctrl+R` | Reload dialogs and statistics |
+| `Ctrl+R` | Restart the exact dialog scan |
 | `Esc` | Cancel or go back |
 | `?` | View sanitized in-memory diagnostics |
 | `Ctrl+C` or `Q` | Quit; `Q` remains text in inputs, and deletion stops after the active request |

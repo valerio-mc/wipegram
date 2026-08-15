@@ -129,6 +129,7 @@ export class WipegramApp {
   #deleteAbort: AbortController | null = null
   #deleteProgress: DeleteProgress | null = null
   #refreshing = false
+  #refreshPending = false
   #closing = false
   #refreshGeneration = 0
   readonly #signals: NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT"]
@@ -396,10 +397,18 @@ export class WipegramApp {
   }
 
   private async refresh(): Promise<void> {
-    if (this.#refreshing) return
+    this.#refreshPending = true
+    if (this.#refreshing) {
+      this.#refreshGeneration += 1
+      this.#countAbort?.abort()
+      return
+    }
     this.#refreshing = true
     try {
-      await this.loadChats()
+      while (this.#refreshPending && !this.#closing) {
+        this.#refreshPending = false
+        await this.loadChats()
+      }
     } finally {
       this.#refreshing = false
     }
