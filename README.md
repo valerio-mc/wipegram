@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>Wipe private chats. Remove your group messages. Leave no session behind.</strong>
+  <strong>Wipe private chats. Remove your group messages. Leave no session file behind.</strong>
 </p>
 
 <p align="center">
@@ -29,8 +29,8 @@ messages you sent.** Destructive actions always require a separate confirmation 
 ## Ephemeral by design
 
 **wipegram never intentionally persists credentials or Telegram session data to disk.
-Authentication state exists only for the lifetime of the process and becomes unreachable when
-wipegram exits.**
+Authentication state exists only for the lifetime of the process. During a graceful exit, wipegram
+makes a bounded request for Telegram to revoke the ephemeral session.**
 
 mtcute runs with `MemoryStorage`; wipegram does not export sessions, write log files, or enable
 verbose MTProto logging. API credentials, phone numbers, login codes, passwords, auth keys, peer
@@ -70,7 +70,9 @@ bun start
 ```
 
 Enter credentials in the OpenTUI. Do not pass secrets as command-line arguments. Each launch creates
-a new in-memory Telegram session, so Telegram authentication is required again after exit.
+a new in-memory Telegram session, so Telegram authentication is required again after exit. Shutdown
+remains bounded if Telegram is unreachable. A crash, forced termination, or failed logout request can
+leave the authorization visible in Telegram's active sessions.
 
 wipegram adapts to the terminal's current dimensions and never resizes the terminal window. Resize
 normally at any time; compact layouts scale the branding to preserve the workflow.

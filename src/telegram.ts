@@ -93,11 +93,14 @@ interface TelegramApi {
     ids: number[],
     params: { revoke: true },
   ): Promise<void>
+  logOut(): Promise<unknown>
   destroy(): Promise<void>
 }
 
 const DELETE_BATCH_SIZE = 100
 const COUNT_CONCURRENCY = 4
+const LOGOUT_TIMEOUT_MS = 3_000
+const DESTROY_TIMEOUT_MS = 1_000
 
 export class TelegramService {
   readonly #deletedMessageIds = new Map<number, Set<number>>()
@@ -167,7 +170,7 @@ export class TelegramService {
         durationMs: elapsed(startedAt),
         code: errorCode(error),
       })
-      await client.destroy()
+      await closeClient(client, diagnostics)
       throw userFacingError(error)
     }
   }
@@ -394,14 +397,7 @@ export class TelegramService {
   }
 
   async disconnect(): Promise<void> {
-    const startedAt = performance.now()
-    await this.client.destroy()
-    this.diagnostics.record({
-      level: "info",
-      operation: "client.destroy",
-      outcome: "success",
-      durationMs: elapsed(startedAt),
-    })
+    await closeClient(this.client, this.diagnostics)
   }
 
   private async deleteBatch(
@@ -497,6 +493,69 @@ export class TelegramService {
       code: errorCode(error),
     })
   }
+}
+
+async function closeClient(
+  client: TelegramApi,
+  diagnostics: Diagnostics,
+): Promise<void> {
+  const logoutStartedAt = performance.now()
+  try {
+    await withTimeout(client.logOut(), LOGOUT_TIMEOUT_MS)
+    diagnostics.record({
+      level: "info",
+      operation: "auth.logout",
+      outcome: "success",
+      durationMs: elapsed(logoutStartedAt),
+    })
+  } catch (error) {
+    diagnostics.record({
+      level: "warn",
+      operation: "auth.logout",
+      outcome: "failed",
+      durationMs: elapsed(logoutStartedAt),
+      code: errorCode(error),
+    })
+  }
+
+  const destroyStartedAt = performance.now()
+  try {
+    await withTimeout(client.destroy(), DESTROY_TIMEOUT_MS)
+    diagnostics.record({
+      level: "info",
+      operation: "client.destroy",
+      outcome: "success",
+      durationMs: elapsed(destroyStartedAt),
+    })
+  } catch (error) {
+    diagnostics.record({
+      level: "warn",
+      operation: "client.destroy",
+      outcome: "failed",
+      durationMs: elapsed(destroyStartedAt),
+      code: errorCode(error),
+    })
+  }
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      const error = new Error("Telegram shutdown timed out")
+      error.name = "TimeoutError"
+      reject(error)
+    }, timeoutMs)
+    promise.then(
+      (value) => {
+        clearTimeout(timer)
+        resolve(value)
+      },
+      (error: unknown) => {
+        clearTimeout(timer)
+        reject(error)
+      },
+    )
+  })
 }
 
 function previewContent(message: Message): string {

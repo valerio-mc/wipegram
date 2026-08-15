@@ -72,6 +72,7 @@ const CHAT_ROW_HEIGHT = 2
 const LIST_CHROME_HEIGHT = 4
 const STACKED_PREVIEW_HEIGHT = 7
 const PREVIEW_PAGE_SIZE = 15
+const SHUTDOWN_DEADLINE_MS = 5_000
 const LOGO_SOURCE = new URL("../wipegram.png", import.meta.url)
 
 export function calculateChatLayout(width: number, height: number, hasError: boolean): ChatLayout {
@@ -1152,6 +1153,8 @@ export class WipegramApp {
   private async close(): Promise<void> {
     if (this.#closing) return
     this.#closing = true
+    const forceExit = setTimeout(() => process.exit(1), SHUTDOWN_DEADLINE_MS)
+    forceExit.unref()
     this.#refreshGeneration += 1
     this.#previewToken += 1
     this.#pendingPrompt?.("")
