@@ -19,7 +19,7 @@ messages you sent.** Destructive actions always require a separate confirmation 
 
 - Polished, keyboard-driven [OpenTUI](https://opentui.com/) interface
 - Responsive onboarding with native-image branding across supported terminal sizes
-- Telegram-side cleanup counts with bounded concurrency
+- Exact Telegram-side cleanup counts that exclude service events
 - In-memory message previews with 15-message, on-demand history pages
 - Local chat search and explicit multi-chat selection
 - Full private-chat revocation and batched own-message deletion in groups
@@ -99,6 +99,8 @@ what can be revoked. Failed batches or history requests are reported rather than
 successful. Private-chat counts are pre-deletion estimates. Cancelling stops new requests after any
 request already in flight finishes. If a multi-request private cleanup is interrupted, wipegram
 reports its estimated scope as unconfirmed because Telegram does not return a per-request count.
+Telegram-managed service events are excluded from group counts and deletion because they are not
+reliably revocable; a group containing only those events is considered clean.
 
 ## Tech
 

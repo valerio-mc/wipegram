@@ -76,11 +76,6 @@ export interface DeleteResult {
 
 interface TelegramApi {
   iterDialogs(): AsyncIterableIterator<Dialog>
-  searchMessages(params: {
-    chatId: InputPeerLike
-    fromUser: "self"
-    limit: number
-  }): Promise<ArrayLike<Message> & { total: number }>
   iterSearchMessages(params: {
     chatId: InputPeerLike
     fromUser: "self"
@@ -228,25 +223,35 @@ export class TelegramService {
         if (!chat) return
         const startedAt = performance.now()
         try {
-          const messages =
-            chat.deletionScope === "history"
-              ? await this.client.getHistory(chat.peer, { limit: 1 })
-              : await this.client.searchMessages({
-                  chatId: chat.peer,
-                  fromUser: "self",
-                  limit: 1,
-                })
+          let count: number
+          if (chat.deletionScope === "history") {
+            count = (await this.client.getHistory(chat.peer, { limit: 1 })).total
+          } else {
+            count = 0
+            for await (const message of this.client.iterSearchMessages({
+              chatId: chat.peer,
+              fromUser: "self",
+              chunkSize: DELETE_BATCH_SIZE,
+            })) {
+              if (signal?.aborted) return
+              if (isDeletableOwnMessage(message)) count += 1
+            }
+          }
           analyzed += 1
           this.diagnostics.record({
             level: "info",
             operation: "messages.count",
             outcome: "success",
             durationMs: elapsed(startedAt),
-            count: messages.total,
+            count,
           })
-          onProgress({ chatId: chat.id, count: messages.total, analyzed, total: chats.length })
+          onProgress({ chatId: chat.id, count, analyzed, total: chats.length })
         } catch (error) {
           analyzed += 1
+          if (tl.RpcError.is(error, "CHANNEL_PRIVATE")) {
+            onProgress({ chatId: chat.id, count: 0, analyzed, total: chats.length })
+            continue
+          }
           this.recordFailure("messages.count", startedAt, error)
           onProgress({
             chatId: chat.id,
@@ -277,10 +282,10 @@ export class TelegramService {
         ...(offset ? { offset } : {}),
       })
       for (const message of Array.from(history)) {
-        const own = message.sender.id === this.selfId
+        const own = !message.isService && message.sender.id === this.selfId
         preview.push({
           id: message.id,
-          author: own ? "You" : message.sender.displayName,
+          author: message.isService ? "Service" : own ? "You" : message.sender.displayName,
           own,
           sentAt: message.date,
           content: previewContent(message),
@@ -343,6 +348,7 @@ export class TelegramService {
           chunkSize: DELETE_BATCH_SIZE,
         })) {
           if (signal.aborted) break
+          if (!isDeletableOwnMessage(message)) continue
           batch.push(message.id)
           if (batch.length !== DELETE_BATCH_SIZE) continue
           const result = await this.deleteBatch(chat, batch)
@@ -495,6 +501,10 @@ function previewContent(message: Message): string {
     location: "Location",
   }
   return `[${labels[type] ?? "Media"}]`
+}
+
+function isDeletableOwnMessage(message: Message): boolean {
+  return !message.isService
 }
 
 function errorCode(error: unknown): string {
