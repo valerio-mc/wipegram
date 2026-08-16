@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="wipegram.png" alt="wipegram" width="360">
+  <img src="assets/wipegram.png" alt="wipegram" width="360">
 </p>
 
 <p align="center">
@@ -14,6 +14,18 @@ wipegram authenticates as you, lists your Telegram dialogs, previews recent cont
 select chats for cleanup. **In private one-to-one chats it wipes the complete conversation for both
 participants, including received messages. In groups, channels, and communities it deletes only
 messages you sent.** Destructive actions always require a separate confirmation step.
+
+## Preview
+
+<p align="center">
+  <img src="assets/onboarding.png" alt="wipegram memory-only Telegram authentication screen" width="900">
+</p>
+<p align="center"><em>Process-only authentication keeps credentials and session data in memory.</em></p>
+
+<p align="center">
+  <img src="assets/chat-cleanup.png" alt="wipegram chat cleanup list and message preview" width="900">
+</p>
+<p align="center"><em>Exact cleanup scopes, multi-chat navigation, and recent context. All names, chats, message counts, and conversations shown are fictional.</em></p>
 
 ## Features
 

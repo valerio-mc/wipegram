@@ -73,7 +73,7 @@ const LIST_CHROME_HEIGHT = 4
 const STACKED_PREVIEW_HEIGHT = 7
 const PREVIEW_PAGE_SIZE = 15
 const SHUTDOWN_DEADLINE_MS = 5_000
-const LOGO_SOURCE = new URL("../wipegram.png", import.meta.url)
+const LOGO_SOURCE = new URL("../assets/wipegram.png", import.meta.url)
 
 function calculateChatLayout(width: number, height: number, hasError: boolean): ChatLayout {
   const wide = width >= 94
