@@ -1,6 +1,6 @@
-export type DiagnosticLevel = "info" | "warn" | "error"
+type DiagnosticLevel = "info" | "warn" | "error"
 
-export interface DiagnosticEntry {
+interface DiagnosticEntry {
   readonly at: Date
   readonly level: DiagnosticLevel
   readonly operation: string

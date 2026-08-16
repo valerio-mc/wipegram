@@ -14,13 +14,13 @@ interface HistoryOffset {
   date: number
 }
 
-export interface TelegramCredentials {
+interface TelegramCredentials {
   apiId: number
   apiHash: string
   phone: string
 }
 
-export interface AuthenticationPrompts {
+interface AuthenticationPrompts {
   code(): Promise<string>
   password(): Promise<string>
   codeSent(message: string): void
@@ -50,7 +50,7 @@ export interface MessagePreviewPage {
   readonly next?: HistoryOffset
 }
 
-export interface CountProgress {
+interface CountProgress {
   readonly chatId: number
   readonly count: number | null
   readonly analyzed: number
@@ -109,7 +109,7 @@ export class TelegramService {
   private constructor(
     private readonly client: TelegramApi,
     private readonly diagnostics: Diagnostics,
-    private readonly selfId: number | null,
+    private readonly selfId: number,
   ) {}
 
   static async authenticate(
@@ -181,10 +181,6 @@ export class TelegramService {
       await closeClient(client, diagnostics)
       throw userFacingError(error)
     }
-  }
-
-  static fromApi(api: TelegramApi, diagnostics: Diagnostics, selfId: number | null = null): TelegramService {
-    return new TelegramService(api, diagnostics, selfId)
   }
 
   async getDialogs(): Promise<ChatSummary[]> {
@@ -620,7 +616,7 @@ function errorCode(error: unknown): string {
   return "UNKNOWN"
 }
 
-export function userFacingError(error: unknown): Error {
+function userFacingError(error: unknown): Error {
   if (error instanceof AuthenticationSetupError) return error
   if (tl.RpcError.is(error, "API_ID_INVALID")) return new Error("Invalid API credentials")
   if (tl.RpcError.is(error, "PHONE_CODE_INVALID")) return new Error("Incorrect login code")

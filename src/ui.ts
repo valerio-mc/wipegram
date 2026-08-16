@@ -75,7 +75,7 @@ const PREVIEW_PAGE_SIZE = 15
 const SHUTDOWN_DEADLINE_MS = 5_000
 const LOGO_SOURCE = new URL("../wipegram.png", import.meta.url)
 
-export function calculateChatLayout(width: number, height: number, hasError: boolean): ChatLayout {
+function calculateChatLayout(width: number, height: number, hasError: boolean): ChatLayout {
   const wide = width >= 94
   const footerHeight = 2 + (hasError ? 1 : 0)
   const availableHeight = Math.max(1, height - 2 - footerHeight)
