@@ -18,14 +18,10 @@ messages you sent.** Destructive actions always require a separate confirmation 
 ## Preview
 
 <p align="center">
-  <img src="assets/onboarding.png" alt="wipegram memory-only Telegram authentication screen" width="900">
+  <img src="assets/onboarding.png" alt="wipegram memory-only Telegram authentication screen" width="49%">
+  <img src="assets/chat-cleanup.png" alt="wipegram chat cleanup list and message preview" width="49%">
 </p>
-<p align="center"><em>Process-only authentication keeps credentials and session data in memory.</em></p>
-
-<p align="center">
-  <img src="assets/chat-cleanup.png" alt="wipegram chat cleanup list and message preview" width="900">
-</p>
-<p align="center"><em>Exact cleanup scopes, multi-chat navigation, and recent context. All names, chats, message counts, and conversations shown are fictional.</em></p>
+<p align="center"><em>Memory-only authentication and the cleanup workflow. All names, chats, message counts, and conversations shown are fictional.</em></p>
 
 ## Features
 
